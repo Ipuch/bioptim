@@ -281,11 +281,11 @@ def test_update_noised_init_rk4(interpolation):
             expected = np.array(
                 [
                     [0.00292881],
-                    [-0.1],
-                    [-0.1],
-                    [-0.1],
-                    [-0.1],
-                    [-0.1],
+                    [0.0],
+                    [0.0],
+                    [0.0],
+                    [0.0],
+                    [0.0],
                     [0.01291136],
                     [0.00583576],
                     [-0.01464717],
@@ -299,11 +299,11 @@ def test_update_noised_init_rk4(interpolation):
                     [0.34954208],
                     [-0.04840646],
                     [0.00269299],
-                    [-0.1],
+                    [0.0],
                     [1.67],
-                    [-0.1],
-                    [-0.1],
-                    [-0.1],
+                    [0.0],
+                    [0.0],
+                    [0.0],
                     [-1.5269023],
                     [1.77867567],
                     [-0.94177755],
@@ -315,15 +315,16 @@ def test_update_noised_init_rk4(interpolation):
                     [-0.17539867],
                 ]
             )
+
         elif interpolation == InterpolationType.LINEAR:
             expected = np.array(
                 [
                     [1.00292881e00],
-                    [-1.00000000e-01],
-                    [-1.00000000e-01],
-                    [-1.00000000e-01],
-                    [-1.00000000e-01],
-                    [-1.00000000e-01],
+                    [0.00000000e00],
+                    [0.00000000e00],
+                    [0.00000000e00],
+                    [0.00000000e00],
+                    [0.00000000e00],
                     [1.26291136e00],
                     [5.83576452e-03],
                     [3.77852829e-01],
@@ -337,11 +338,11 @@ def test_update_noised_init_rk4(interpolation):
                     [3.49542082e-01],
                     [-4.84064610e-02],
                     [1.75269299e00],
-                    [-1.00000000e-01],
+                    [0.00000000e00],
                     [1.67000000e00],
-                    [-1.00000000e-01],
-                    [-1.00000000e-01],
-                    [-1.00000000e-01],
+                    [0.00000000e00],
+                    [0.00000000e00],
+                    [0.00000000e00],
                     [-7.69022965e-02],
                     [1.15886757e01],
                     [1.33822245e00],
@@ -353,6 +354,7 @@ def test_update_noised_init_rk4(interpolation):
                     [-9.35398671e-01],
                 ]
             )
+
         elif interpolation == InterpolationType.SPLINE:
             expected = np.array(
                 [
@@ -396,11 +398,11 @@ def test_update_noised_init_rk4(interpolation):
             expected = np.array(
                 [
                     [1.00292881e00],
-                    [-1.00000000e-01],
-                    [-1.00000000e-01],
-                    [-1.00000000e-01],
-                    [-1.00000000e-01],
-                    [-1.00000000e-01],
+                    [0.00000000e00],
+                    [0.00000000e00],
+                    [0.00000000e00],
+                    [0.00000000e00],
+                    [0.00000000e00],
                     [1.51291136e00],
                     [5.83576452e-03],
                     [7.70352829e-01],
@@ -414,11 +416,11 @@ def test_update_noised_init_rk4(interpolation):
                     [3.49542082e-01],
                     [-4.84064610e-02],
                     [1.50269299e00],
-                    [-1.00000000e-01],
+                    [0.00000000e00],
                     [1.67000000e00],
-                    [-1.00000000e-01],
-                    [-1.00000000e-01],
-                    [-1.00000000e-01],
+                    [0.00000000e00],
+                    [0.00000000e00],
+                    [0.00000000e00],
                     [-7.69022965e-02],
                     [1.15886757e01],
                     [1.33822245e00],
@@ -435,11 +437,11 @@ def test_update_noised_init_rk4(interpolation):
             expected = np.array(
                 [
                     [0.00292881],
-                    [-0.1],
-                    [-0.1],
-                    [-0.1],
-                    [-0.1],
-                    [-0.1],
+                    [0.0],
+                    [0.0],
+                    [0.0],
+                    [0.0],
+                    [0.0],
                     [0.01291136],
                     [0.00583576],
                     [-0.01464717],
@@ -453,11 +455,11 @@ def test_update_noised_init_rk4(interpolation):
                     [0.34954208],
                     [-0.04840646],
                     [0.00269299],
-                    [-0.1],
+                    [0.0],
                     [1.67],
-                    [-0.1],
-                    [-0.1],
-                    [-0.1],
+                    [0.0],
+                    [0.0],
+                    [0.0],
                     [-1.5269023],
                     [1.77867567],
                     [-0.94177755],
@@ -566,11 +568,11 @@ def test_update_noised_init_collocation(interpolation):
         expected = np.array(
             [
                 [0.00292881],
-                [-0.1],
-                [-0.1],
-                [-0.1],
-                [-0.1],
-                [-0.1],
+                [0.0],
+                [0.0],
+                [0.0],
+                [0.0],
+                [0.0],
                 [0.01291136],
                 [0.00583576],
                 [-0.01464717],
@@ -602,11 +604,11 @@ def test_update_noised_init_collocation(interpolation):
                 [0.34954208],
                 [-0.04840646],
                 [0.00269299],
-                [-0.1],
+                [0.0],
                 [1.67],
-                [-0.1],
-                [-0.1],
-                [-0.1],
+                [0.0],
+                [0.0],
+                [0.0],
                 [-1.5269023],
                 [1.77867567],
                 [-0.94177755],
@@ -623,11 +625,11 @@ def test_update_noised_init_collocation(interpolation):
         expected = np.array(
             [
                 [1.00292881e00],
-                [-1.00000000e-01],
-                [-1.00000000e-01],
-                [-1.00000000e-01],
-                [-1.00000000e-01],
-                [-1.00000000e-01],
+                [0.00000000e00],
+                [0.00000000e00],
+                [0.00000000e00],
+                [0.00000000e00],
+                [0.00000000e00],
                 [1.26291136e00],
                 [5.83576452e-03],
                 [3.77852829e-01],
@@ -659,11 +661,11 @@ def test_update_noised_init_collocation(interpolation):
                 [3.49542082e-01],
                 [-4.84064610e-02],
                 [1.75269299e00],
-                [-1.00000000e-01],
+                [0.00000000e00],
                 [1.67000000e00],
-                [-1.00000000e-01],
-                [-1.00000000e-01],
-                [-1.00000000e-01],
+                [0.00000000e00],
+                [0.00000000e00],
+                [0.00000000e00],
                 [-7.69022965e-02],
                 [1.15886757e01],
                 [1.33822245e00],
@@ -737,11 +739,11 @@ def test_update_noised_init_collocation(interpolation):
         expected = np.array(
             [
                 [1.00292881e00],
-                [-1.00000000e-01],
-                [-1.00000000e-01],
-                [-1.00000000e-01],
-                [-1.00000000e-01],
-                [-1.00000000e-01],
+                [0.00000000e00],
+                [0.00000000e00],
+                [0.00000000e00],
+                [0.00000000e00],
+                [0.00000000e00],
                 [1.51291136e00],
                 [5.83576452e-03],
                 [7.70352829e-01],
@@ -773,11 +775,11 @@ def test_update_noised_init_collocation(interpolation):
                 [3.49542082e-01],
                 [-4.84064610e-02],
                 [1.50269299e00],
-                [-1.00000000e-01],
+                [0.00000000e00],
                 [1.67000000e00],
-                [-1.00000000e-01],
-                [-1.00000000e-01],
-                [-1.00000000e-01],
+                [0.00000000e00],
+                [0.00000000e00],
+                [0.00000000e00],
                 [-7.69022965e-02],
                 [1.15886757e01],
                 [1.33822245e00],
@@ -1277,13 +1279,13 @@ def test_update_noised_initial_guess_rk4(n_extra):
             [-0.1],
             [-0.1],
             [1.02704286],
-            [0.9],
+            [0.98623978],
             [1.02614717],
             [-6.22970669],
             [1.62219699],
             [-8.06050751],
             [1.01391964],
-            [0.9],
+            [0.98232334],
             [0.93975487],
             [-6.99661076],
             [-0.71040824],
@@ -1407,11 +1409,11 @@ def test_update_noised_initial_guess_collocation(interpolation):
         expected = np.array(
             [
                 [-0.00752759],
-                [-0.1],
-                [-0.1],
-                [-0.1],
-                [-0.1],
-                [-0.1],
+                [0.0],
+                [0.0],
+                [0.0],
+                [0.0],
+                [0.0],
                 [0.02704286],
                 [-0.01376022],
                 [0.02614717],
@@ -1443,11 +1445,11 @@ def test_update_noised_initial_guess_collocation(interpolation):
                 [-0.08552041],
                 [-0.26119874],
                 [0.00591951],
-                [-0.1],
+                [0.0],
                 [1.67],
-                [-0.1],
-                [-0.1],
-                [-0.1],
+                [0.0],
+                [0.0],
+                [0.0],
                 [-0.50183952],
                 [0.39463394],
                 [-1.76766555],
@@ -1464,11 +1466,11 @@ def test_update_noised_initial_guess_collocation(interpolation):
         expected = np.array(
             [
                 [0.99247241],
-                [-0.1],
-                [-0.1],
-                [-0.1],
-                [-0.1],
-                [-0.1],
+                [0.0],
+                [0.0],
+                [0.0],
+                [0.0],
+                [0.0],
                 [1.27704286],
                 [-0.01376022],
                 [0.41864717],
@@ -1500,11 +1502,11 @@ def test_update_noised_initial_guess_collocation(interpolation):
                 [-0.08552041],
                 [-0.26119874],
                 [1.75591951],
-                [-0.1],
+                [0.0],
                 [1.67],
-                [-0.1],
-                [-0.1],
-                [-0.1],
+                [0.0],
+                [0.0],
+                [0.0],
                 [0.94816048],
                 [10.20463394],
                 [0.51233445],
@@ -1578,11 +1580,11 @@ def test_update_noised_initial_guess_collocation(interpolation):
         expected = np.array(
             [
                 [0.99247241],
-                [-0.1],
-                [-0.1],
-                [-0.1],
-                [-0.1],
-                [-0.1],
+                [0.0],
+                [0.0],
+                [0.0],
+                [0.0],
+                [0.0],
                 [1.52704286],
                 [-0.01376022],
                 [0.81114717],
@@ -1614,11 +1616,11 @@ def test_update_noised_initial_guess_collocation(interpolation):
                 [-0.08552041],
                 [-0.26119874],
                 [1.50591951],
-                [-0.1],
+                [0.0],
                 [1.67],
-                [-0.1],
-                [-0.1],
-                [-0.1],
+                [0.0],
+                [0.0],
+                [0.0],
                 [0.94816048],
                 [10.20463394],
                 [0.51233445],
@@ -1635,11 +1637,11 @@ def test_update_noised_initial_guess_collocation(interpolation):
         expected = np.array(
             [
                 [-0.00752759],
-                [-0.1],
-                [-0.1],
-                [-0.1],
-                [-0.1],
-                [-0.1],
+                [0.0],
+                [0.0],
+                [0.0],
+                [0.0],
+                [0.0],
                 [0.36037619],
                 [0.31957311],
                 [0.3594805],
@@ -1692,11 +1694,11 @@ def test_update_noised_initial_guess_collocation(interpolation):
         expected = np.array(
             [
                 [-0.00752759],
-                [-0.1],
-                [-0.1],
-                [-0.1],
-                [-0.1],
-                [-0.1],
+                [0.0],
+                [0.0],
+                [0.0],
+                [0.0],
+                [0.0],
                 [0.19370953],
                 [0.17071127],
                 [0.1268821],
@@ -1733,6 +1735,117 @@ def test_update_noised_initial_guess_collocation(interpolation):
                 [-0.1],
                 [-0.1],
                 [-0.1],
+                [-0.50183952],
+                [0.39463394],
+                [-1.76766555],
+                [1.80285723],
+                [-1.37592544],
+                [1.46470458],
+                [0.92797577],
+                [-1.37602192],
+                [0.40446005],
+            ]
+        )
+
+    np.testing.assert_almost_equal(ocp.v.init.init, expected)
+    with pytest.raises(RuntimeError, match="x_bounds should be built from a Bounds or BoundsList"):
+        ocp.update_bounds(x_init, u_init)
+
+
+@pytest.mark.parametrize(
+    "interpolation",
+    [
+        InterpolationType.CONSTANT,
+    ],
+)
+def test_update_noised_initial_guess_list(interpolation):
+    bioptim_folder = TestUtils.bioptim_folder()
+    biorbd_model = biorbd.Model(bioptim_folder + "/examples/getting_started/models/cube.bioMod")
+    nq = biorbd_model.nbQ()
+    nqdot = biorbd_model.nbQdot()
+    ntau = biorbd_model.nbGeneralizedTorque()
+    ns = 3
+    phase_time = 1.0
+    solver = OdeSolver.COLLOCATION(polynomial_degree=1)
+
+    dynamics = DynamicsList()
+    dynamics.add(DynamicsFcn.TORQUE_DRIVEN)
+    ocp = OptimalControlProgram(biorbd_model, dynamics, n_shooting=ns, phase_time=phase_time, ode_solver=solver)
+
+    # Path constraint and control path constraints
+    x_bounds = QAndQDotBounds(biorbd_model)
+    x_bounds[1:6, [0, -1]] = 0
+    x_bounds[2, -1] = 1.57
+
+    tau_min, tau_max, tau_init = -100, 100, 0
+    u_bounds = Bounds([tau_min] * ntau, [tau_max] * ntau)
+
+    x_init = NoisedInitialGuess(
+        initial_guess=[0] * (nq + nqdot),
+        interpolation=InterpolationType.CONSTANT,
+        bounds=x_bounds,
+        noise_magnitude=0.01,
+        n_shooting=ns,
+        bound_push=0.1,
+        seed=42,
+    )
+    u_init = NoisedInitialGuess(
+        initial_guess=[tau_init] * ntau,
+        interpolation=InterpolationType.CONSTANT,
+        bounds=u_bounds,
+        noise_magnitude=0.01,
+        n_shooting=ns - 1,
+        bound_push=0.1,
+        seed=42,
+    )
+
+    ocp.update_initial_guess(x_init, u_init)
+    print(ocp.v.init.init)
+    if interpolation == InterpolationType.CONSTANT:
+        expected = np.array(
+            [
+                [-0.00752759],
+                [0.0],
+                [0.0],
+                [0.0],
+                [0.0],
+                [0.0],
+                [0.02704286],
+                [-0.01376022],
+                [0.02614717],
+                [-0.36148533],
+                [0.03110985],
+                [-0.45302538],
+                [0.02704286],
+                [-0.01376022],
+                [0.02614717],
+                [-0.36148533],
+                [0.03110985],
+                [-0.45302538],
+                [0.02704286],
+                [-0.01376022],
+                [0.02614717],
+                [-0.36148533],
+                [0.03110985],
+                [-0.45302538],
+                [0.01391964],
+                [-0.01767666],
+                [-0.06024513],
+                [-0.39983054],
+                [-0.08552041],
+                [-0.26119874],
+                [0.01391964],
+                [-0.01767666],
+                [-0.06024513],
+                [-0.39983054],
+                [-0.08552041],
+                [-0.26119874],
+                [0.00591951],
+                [0.0],
+                [1.67],
+                [0.0],
+                [0.0],
+                [0.0],
                 [-0.50183952],
                 [0.39463394],
                 [-1.76766555],
