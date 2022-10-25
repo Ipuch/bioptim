@@ -697,7 +697,7 @@ class IRK(COLLOCATION):
         vfcn = Function("vfcn", [vertcat(*states[1:]), states[0], controls, params], [defect]).expand()
 
         # Create a implicit function instance to solve the system of equations
-        ifcn = rootfinder("ifcn", "newton", vfcn)
+        ifcn = rootfinder("ifcn", "newton", vfcn, dict(error_on_fail=False))
         x_irk_points = ifcn(self.cx(), states[0], controls, params)
         x = [states[0] if r == 0 else x_irk_points[(r - 1) * nx : r * nx] for r in range(self.degree + 1)]
 
