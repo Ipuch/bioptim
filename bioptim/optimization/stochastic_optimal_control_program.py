@@ -189,7 +189,7 @@ class StochasticOptimalControlProgram(OptimalControlProgram):
             integrated_value_functions,
         )
         self.problem_type = problem_type
-        self.initialize_stochastic_variables()
+        # self.initialize_stochastic_variables()
         self.prepare_node_mapping(node_mappings)
         self.prepare_dynamics()
         self.prepare_bounds_and_init(
@@ -208,14 +208,14 @@ class StochasticOptimalControlProgram(OptimalControlProgram):
             phase_transitions,
         )
 
-    def initialize_stochastic_variables(self):
-        n_motor_noise = self.problem_type.motor_noise_magnitude.shape[0]
-        n_sensory_noise = self.problem_type.sensory_noise_magnitude.shape[0]
-        motor_noise = self.cx.sym("motor_noise", n_motor_noise, 1)
-        sensory_noise = self.cx.sym("sensory_noise", n_sensory_noise, 1)
-        NLP.add(self, "is_stochastic", True, True)
-        NLP.add(self, "motor_noise", motor_noise, True)
-        NLP.add(self, "sensory_noise", sensory_noise, True)
+    # def initialize_stochastic_variables(self):
+    #     n_motor_noise = self.problem_type.motor_noise_magnitude.shape[0]
+    #     n_sensory_noise = self.problem_type.sensory_noise_magnitude.shape[0]
+    #     motor_noise = self.cx.sym("motor_noise", n_motor_noise, 1)
+    #     sensory_noise = self.cx.sym("sensory_noise", n_sensory_noise, 1)
+    #     NLP.add(self, "is_stochastic", True, True)
+    #     NLP.add(self, "motor_noise", motor_noise, True)
+    #     NLP.add(self, "sensory_noise", sensory_noise, True)
 
     def prepare_dynamics(self):
         # Prepare the dynamics
@@ -270,9 +270,9 @@ class StochasticOptimalControlProgram(OptimalControlProgram):
                     MultinodeConstraintFcn.STOCHASTIC_HELPER_MATRIX_EXPLICIT,
                     nodes_phase=(i_phase - 1, i_phase),
                     nodes=(-1, 0),
-                    dynamics=nlp.dynamics_type.dynamic_function,
-                    motor_noise_magnitude=motor_noise_magnitude,
-                    sensory_noise_magnitude=sensory_noise_magnitude,
+                    # dynamics=nlp.dynamics_type.dynamic_function,
+                    # motor_noise_magnitude=motor_noise_magnitude,
+                    # sensory_noise_magnitude=sensory_noise_magnitude,
                 )
         penalty_m_dg_dz_list.add_or_replace_to_penalty_pool(self)
 
