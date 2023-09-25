@@ -21,6 +21,7 @@ from bioptim import (
     NonLinearProgram, DynamicsEvaluation, DynamicsFunctions, ConfigureProblem, Constraint, Axis, InitialGuessList,
     InterpolationType, ParameterList, ParameterObjectiveList,
 )
+import numpy as np
 from custom_package.fes_dynamics import FesDynamicsFcn
 from sandbox.custom_package.fes_objectives import FesObjective
 
@@ -79,15 +80,15 @@ def prepare_ocp(
     for i in range(n_phase_total):
         objective_functions.add(ObjectiveFcn.Lagrange.MINIMIZE_STATE, key="q", weight=10, phase=i)
         objective_functions.add(ObjectiveFcn.Lagrange.MINIMIZE_STATE, key="qdot", weight=10, phase=i)
-        # objective_functions.add(
-        #     FesObjective.custom_func_track_torque,
-        #     custom_type=ObjectiveFcn.Mayer,
-        #     node=Node.END,
-        #     quadratic=True,
-        #     weight=1e10,
-        #     extra_value=1,
-        #     phase=i,
-        # )
+        objective_functions.add(
+            FesObjective.custom_func_track_torque,
+            custom_type=ObjectiveFcn.Mayer,
+            node=Node.ALL_SHOOTING, # all node expect the last one (Node.END) as this is related to the control i think.
+            target=np.ones((bio_model[i].nb_tau, n_shoot[i])) * 20,  # automatically handled for every cost functions
+            quadratic=True,
+            weight=1e10,
+            phase=i,
+        )
     # Path constraint
     x_bounds = BoundsList()
     for i in range(n_phase_total):
