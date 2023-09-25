@@ -182,6 +182,12 @@ class BioModel(Protocol):
     def muscle_velocity(self, q, qdot) -> MX:
         """Get the muscle velocity"""
 
+    def muscle_joint_torque_from_muscle_forces(self, forces: MX, q: MX, qdot: MX) -> MX:
+        """Get the muscular joint torque from muscle forces"""
+
+    def marker_muscle_joint_torque_from_muscle_forces(self, forces: MX, q: MX, qdot: MX) -> MX:
+        """Get the position of a marker @ specific torque"""
+
     def marker(self, q, marker_index: int, reference_frame_idx: int = None) -> MX:
         """Get the position of a marker"""
 
