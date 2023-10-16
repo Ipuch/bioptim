@@ -1,18 +1,19 @@
 from typing import Callable, Any
 
 import casadi
-from casadi import SX, MX, Function, horzcat, jacobian, MX_eye
+from casadi import SX, MX, Function, horzcat
 
 from .optimization_variable import OptimizationVariable, OptimizationVariableContainer
 from ..dynamics.ode_solver import OdeSolver
 from ..limits.path_conditions import InitialGuessList, BoundsList
-from ..misc.enums import ControlType, Node
+from ..misc.enums import ControlType, PhaseDynamics
 from ..misc.options import OptionList
 from ..misc.mapping import NodeMapping
 from ..dynamics.dynamics_evaluation import DynamicsEvaluation
 from ..interfaces.biomodel import BioModel
 from ..interfaces.holonomic_biomodel import HolonomicBioModel
 from ..interfaces.variational_biomodel import VariationalBioModel
+from ..interfaces.stochastic_bio_model import StochasticBioModel
 
 
 class NonLinearProgram:
@@ -53,7 +54,7 @@ class NonLinearProgram:
         All the objectives at each of the node of the phase
     J_internal: list[list[Objective]]
         All the objectives internally defined by the phase at each of the node of the phase
-    model: BiorbdModel | BioModel
+    model: BiorbdModel | BioModel | StochasticBioModel | HolonomicBioModel | VariationalBioModel
         The biorbd model associated with the phase
     n_threads: int
         The number of thread to use
@@ -75,8 +76,6 @@ class NonLinearProgram:
         The time stamp of the beginning of the phase
     tf: float
         The time stamp of the end of the phase
-    t_initial_guess: float
-        The initial guess of the time
     variable_mappings: BiMappingList
         The list of mapping for all the variables
     u_bounds = Bounds()
@@ -118,27 +117,30 @@ class NonLinearProgram:
         Add to the pool of declared casadi function. If the function already exists, it is skipped
     """
 
-    def __init__(self, assume_phase_dynamics):
+    def __init__(self, phase_dynamics: PhaseDynamics):
         self.casadi_func = {}
         self.contact_forces_func = None
         self.soft_contact_forces_func = None
         self.control_type = ControlType.NONE
         self.cx = None
         self.dt = None
-        self.dynamics = []
+        self.dynamics = (
+            None  # TODO Change this to a list to include extra_dynamics in a single vector (that matches dynamics_func)
+        )
+        self.extra_dynamics = []
         self.dynamics_evaluation = DynamicsEvaluation()
-        self.dynamics_func = None
-        self.noised_dynamics_func = None
-        self.implicit_dynamics_func = None
-        self.noised_implicit_dynamics_func = None
+        self.dynamics_func: list = []
+        self.implicit_dynamics_func: list = []
         self.dynamics_type = None
-        self.external_forces: list[Any] = []
+        self.external_forces: list[
+            list[Any, ...], ...
+        ] | None = None  # List (each node) of list that are passed to the model as external forces
         self.g = []
         self.g_internal = []
         self.g_implicit = []
         self.J = []
         self.J_internal = []
-        self.model: BioModel | HolonomicBioModel | VariationalBioModel | None = None
+        self.model: BioModel | StochasticBioModel | HolonomicBioModel | VariationalBioModel | None = None
         self.n_threads = None
         self.ns = None
         self.ode_solver = OdeSolver.RK4()
@@ -148,9 +150,9 @@ class NonLinearProgram:
         self.phase_mapping = None
         self.plot = {}
         self.plot_mapping = {}
+        self.T = None
         self.t0 = None
         self.tf = None
-        self.t_initial_guess = None
         self.variable_mappings = {}
         self.u_bounds = BoundsList()
         self.u_init = InitialGuessList()
@@ -170,18 +172,18 @@ class NonLinearProgram:
         self.S = None
         self.S_scaled = None
         self.s_scaling = None
-        self.assume_phase_dynamics = assume_phase_dynamics
-        self.states = OptimizationVariableContainer(assume_phase_dynamics)
-        self.states_dot = OptimizationVariableContainer(assume_phase_dynamics)
-        self.controls = OptimizationVariableContainer(assume_phase_dynamics)
-        self.stochastic_variables = OptimizationVariableContainer(assume_phase_dynamics)
-        self.integrated_values = OptimizationVariableContainer(assume_phase_dynamics)
-        self.motor_noise = None
-        self.sensory_noise = None
+        self.phase_dynamics = phase_dynamics
+        self.time_cx = None
+        self.time_mx = None
+        self.states = OptimizationVariableContainer(self.phase_dynamics)
+        self.states_dot = OptimizationVariableContainer(self.phase_dynamics)
+        self.controls = OptimizationVariableContainer(self.phase_dynamics)
+        self.stochastic_variables = OptimizationVariableContainer(self.phase_dynamics)
+        self.integrated_values = OptimizationVariableContainer(self.phase_dynamics)
 
-    def initialize(self, cx: Callable = None):
+    def initialize(self, cx: MX | SX | Callable = None):
         """
-        Reset an nlp to a sane initial state
+        Reset a nlp to a sane initial state
 
         Parameters
         ----------
@@ -196,7 +198,8 @@ class NonLinearProgram:
         self.g = []
         self.g_internal = []
         self.casadi_func = {}
-
+        self.time_cx = self.cx.sym(f"time_cx_{self.phase_idx}", 1, 1)
+        self.time_mx = MX.sym(f"time_mx_{self.phase_idx}", 1, 1)
         self.states.initialize_from_shooting(n_shooting=self.ns + 1, cx=self.cx)
         self.states_dot.initialize_from_shooting(n_shooting=self.ns + 1, cx=self.cx)
         self.controls.initialize_from_shooting(n_shooting=self.ns + 1, cx=self.cx)
@@ -238,7 +241,9 @@ class NonLinearProgram:
         else:
             if ocp.n_phases != 1 and not duplicate_singleton:
                 raise RuntimeError(
-                    f"{param_name} size({len(param)}) does not correspond " f"to the number of phases({ocp.n_phases})."
+                    f"{param_name} size({1 if isinstance(param, int) else len(param)}) does not correspond "
+                    f"to the number of phases({ocp.n_phases})."
+                    f"List length of model, final time and node shooting must be equivalent to phase number"
                 )
 
             for i in range(ocp.n_phases):

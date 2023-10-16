@@ -2,9 +2,11 @@ from typing import Any, Callable
 
 from casadi import MX, SX, vertcat
 
+from ..dynamics.ode_solver import OdeSolver
+from ..misc.enums import ControlType, PhaseDynamics
+from ..misc.mapping import BiMapping
 from ..optimization.non_linear_program import NonLinearProgram
-from ..optimization.optimization_variable import OptimizationVariableList
-from ..misc.enums import ControlType, Node
+from ..optimization.optimization_variable import OptimizationVariableList, OptimizationVariable
 
 
 class PenaltyController:
@@ -54,7 +56,8 @@ class PenaltyController:
         s_scaled: list
             References to the scaled stochastic variables
         node_index: int
-            Current node index if ocp.assume_phase_dynamics is True, then node_index is expected to be set to 0
+            Current node index if nlp.phase_dynamics is SHARED_DURING_THE_PHASE,
+            then node_index is expected to be set to 0
         """
 
         self._ocp: Any = ocp
@@ -98,7 +101,7 @@ class PenaltyController:
         return self._nlp.control_type
 
     @property
-    def ode_solver(self) -> ControlType:
+    def ode_solver(self) -> OdeSolver:
         return self._nlp.ode_solver
 
     @property
@@ -120,6 +123,25 @@ class PenaltyController:
     @property
     def model(self):
         return self._nlp.model
+
+    @property
+    def time(self) -> OptimizationVariable:
+        """
+        Return the time associated with the current node index
+
+        Returns
+        -------
+        The time at node node_index
+        """
+
+        tp = OptimizationVariableList(self._nlp.cx, self._nlp.phase_dynamics == PhaseDynamics.SHARED_DURING_THE_PHASE)
+        tp.append(
+            "time",
+            mx=self._nlp.time_mx,
+            cx=[self._nlp.time_cx, self._nlp.time_cx, self._nlp.time_cx],
+            bimapping=BiMapping(to_second=[0], to_first=[0]),
+        )
+        return tp["time"]
 
     @property
     def states(self) -> OptimizationVariableList:
@@ -191,24 +213,20 @@ class PenaltyController:
         return out
 
     @property
-    def motor_noise(self):
-        return self._nlp.motor_noise
-
-    @property
-    def sensory_noise(self):
-        return self._nlp.sensory_noise
-
-    @property
     def integrate(self):
         return self._nlp.dynamics[self.node_index]
 
-    @property
-    def integrate_noised_dynamics(self):
-        return self._nlp.noised_dynamics[self.node_index]
+    def integrate_extra_dynamics(self, dynamics_index):
+        return self._nlp.extra_dynamics[dynamics_index][self.node_index]
 
     @property
     def dynamics(self):
-        return self._nlp.dynamics_func
+        return self._nlp.dynamics_func[0]
+
+    def extra_dynamics(self, dynamics_index):
+        # +1 - index so "integrate_extra_dynamics" and "extra_dynamics" share the same index.
+        # This is a hack which should be dealt properly at some point
+        return self._nlp.dynamics_func[dynamics_index + 1]
 
     @property
     def states_scaled(self) -> OptimizationVariableList:

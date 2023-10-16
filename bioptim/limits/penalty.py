@@ -3,12 +3,13 @@ from math import inf
 import inspect
 
 import biorbd_casadi as biorbd
-from casadi import horzcat, vertcat, SX, Function, atan2, dot, cross, sqrt, MX_eye, MX, jacobian, DM
+from casadi import horzcat, vertcat, SX, Function, atan2, dot, cross, sqrt, MX_eye, MX, jacobian, trace
 
 from .penalty_option import PenaltyOption
 from .penalty_controller import PenaltyController
-from ..misc.enums import Node, Axis, ControlType, QuadratureRule
+from ..misc.enums import Node, Axis, ControlType, QuadratureRule, PhaseDynamics
 from ..misc.mapping import BiMapping
+from ..interfaces.stochastic_bio_model import StochasticBioModel
 
 
 class PenaltyFunctionAbstract:
@@ -167,6 +168,93 @@ class PenaltyFunctionAbstract:
                 )
 
             return controller.stochastic_variables[key].cx_start
+
+        @staticmethod
+        def stochastic_minimize_expected_feedback_efforts(penalty: PenaltyOption, controller: PenaltyController):
+            """
+            This function computes the expected effort due to the motor command and feedback gains for a given sensory noise
+            magnitude.
+            It is computed as Jacobian(effort, states) @ cov @ Jacobian(effort, states).T +
+                                Jacobian(efforts, motor_noise) @ sigma_w @ Jacobian(efforts, motor_noise).T
+
+            Parameters
+            ----------
+            controller : PenaltyController
+                Controller to be used to compute the expected effort.
+            """
+
+            sensory_noise_matrix = controller.model.sensory_noise_magnitude * MX_eye(
+                controller.model.sensory_noise_magnitude.shape[0]
+            )
+
+            # create the casadi function to be evaluated
+            # Get the symbolic variables
+            ref = controller.stochastic_variables["ref"].cx_start
+            if "cholesky_cov" in controller.stochastic_variables.keys():
+                l_cov_matrix = StochasticBioModel.reshape_to_cholesky_matrix(
+                    controller.stochastic_variables["cholesky_cov"].cx_start, controller.model.matrix_shape_cov_cholesky
+                )
+                cov_matrix = l_cov_matrix @ l_cov_matrix.T
+            elif "cov" in controller.stochastic_variables.keys():
+                cov_matrix = StochasticBioModel.reshape_to_matrix(
+                    controller.stochastic_variables["cov"].cx_start, controller.model.matrix_shape_cov
+                )
+            else:
+                raise RuntimeError(
+                    "The covariance matrix must be provided in the stochastic variables to compute the expected efforts."
+                )
+
+            k_matrix = StochasticBioModel.reshape_to_matrix(
+                controller.stochastic_variables["k"].cx_start, controller.model.matrix_shape_k
+            )
+
+            nb_root = controller.model.nb_root
+            nu = controller.model.nb_q - controller.model.nb_root
+
+            q_root = MX.sym("q_root", nb_root, 1)
+            q_joints = MX.sym("q_joints", nu, 1)
+            qdot_root = MX.sym("qdot_root", nb_root, 1)
+            qdot_joints = MX.sym("qdot_joints", nu, 1)
+
+            # Compute the expected effort
+            trace_k_sensor_k = trace(k_matrix @ sensory_noise_matrix @ k_matrix.T)
+            ee = controller.model.sensory_reference(
+                states=vertcat(q_root, q_joints, qdot_root, qdot_joints),
+                controls=controller.controls.cx_start,
+                parameters=controller.parameters.cx_start,
+                stochastic_variables=controller.stochastic_variables.cx_start,
+                nlp=controller.get_nlp,
+            )
+
+            e_fb = k_matrix @ ((ee - ref) + controller.model.sensory_noise_magnitude)
+            jac_e_fb_x = jacobian(e_fb, vertcat(q_joints, qdot_joints))
+
+            fun_jac_e_fb_x = Function(
+                "jac_e_fb_x",
+                [
+                    q_root,
+                    q_joints,
+                    qdot_root,
+                    qdot_joints,
+                    controller.controls_scaled.cx_start,
+                    controller.parameters.cx_start,
+                    controller.stochastic_variables_scaled.cx_start,
+                ],
+                [jac_e_fb_x],
+            )
+
+            eval_jac_e_fb_x = fun_jac_e_fb_x(
+                controller.states.cx_start[:nb_root],
+                controller.states.cx_start[nb_root : nb_root + nu],
+                controller.states.cx_start[nb_root + nu : 2 * nb_root + nu],
+                controller.states.cx_start[2 * nb_root + nu : 2 * (nb_root + nu)],
+                controller.controls_scaled.cx_start,
+                controller.parameters.cx_start,
+                controller.stochastic_variables_scaled.cx_start,
+            )
+            trace_jac_p_jack = trace(eval_jac_e_fb_x @ cov_matrix @ eval_jac_e_fb_x.T)
+            expectedEffort_fb_mx = trace_jac_p_jack + trace_k_sensor_k
+            return expectedEffort_fb_mx
 
         @staticmethod
         def minimize_fatigue(penalty: PenaltyOption, controller: PenaltyController, key: str):
@@ -724,6 +812,7 @@ class PenaltyFunctionAbstract:
             penalty.quadratic = True if penalty.quadratic is None else penalty.quadratic
 
             contact_force = controller.get_nlp.contact_forces_func(
+                controller.time.cx,
                 controller.states.cx_start,
                 controller.controls.cx_start,
                 controller.parameters.cx,
@@ -763,7 +852,7 @@ class PenaltyFunctionAbstract:
                 force_idx.append(4 + (6 * i_sc))
                 force_idx.append(5 + (6 * i_sc))
             soft_contact_force = controller.get_nlp.soft_contact_forces_func(
-                controller.states.cx_start, controller.controls.cx_start, controller.parameters.cx
+                controller.time.cx, controller.states.cx_start, controller.controls.cx_start, controller.parameters.cx
             )
             return soft_contact_force[force_idx]
 
@@ -1026,7 +1115,7 @@ class PenaltyFunctionAbstract:
             return controller.mx_to_cx("vector_orientations_difference", out, controller.states["q"])
 
         @staticmethod
-        def continuity(penalty: PenaltyOption, controller: PenaltyController | list):
+        def state_continuity(penalty: PenaltyOption, controller: PenaltyController | list):
             if controller.control_type in (ControlType.CONSTANT, ControlType.CONSTANT_WITH_LAST_NODE, ControlType.NONE):
                 u = controller.controls.cx_start
             elif controller.control_type == ControlType.LINEAR_CONTINUOUS:
@@ -1038,9 +1127,12 @@ class PenaltyFunctionAbstract:
             if isinstance(penalty.node, (list, tuple)) and len(penalty.node) != 1:
                 raise RuntimeError("continuity should be called one node at a time")
 
-            penalty.expand = controller.get_nlp.dynamics_type.expand
+            penalty.expand = controller.get_nlp.dynamics_type.expand_continuity
 
-            if len(penalty.node_idx) > 1 and not controller.ocp.assume_phase_dynamics:
+            if (
+                len(penalty.node_idx) > 1
+                and not controller.get_nlp.phase_dynamics == PhaseDynamics.SHARED_DURING_THE_PHASE
+            ):
                 raise NotImplementedError(
                     f"Length of node index superior to 1 is not implemented yet,"
                     f" actual length {len(penalty.node_idx[0])} "
@@ -1048,23 +1140,27 @@ class PenaltyFunctionAbstract:
 
             continuity = controller.states.cx_end
             if controller.get_nlp.ode_solver.is_direct_collocation:
-                cx = horzcat(*([controller.states.cx_start] + controller.states.cx_intermediates_list))
+                if controller.get_nlp.ode_solver.include_starting_collocation_point:
+                    cx = horzcat(*controller.states.cx_intermediates_list)
+                else:
+                    cx = horzcat(*([controller.states.cx_start] + controller.states.cx_intermediates_list))
                 continuity -= controller.integrate(
-                    x0=cx, p=u, params=controller.parameters.cx, s=controller.stochastic_variables.cx_start
+                    x0=cx, u=u, p=controller.parameters.cx, s=controller.stochastic_variables.cx_start
                 )["xf"]
                 continuity = vertcat(
                     continuity,
                     controller.integrate(
-                        x0=cx, p=u, params=controller.parameters.cx, s=controller.stochastic_variables.cx_start
+                        x0=cx, u=u, p=controller.parameters.cx, s=controller.stochastic_variables.cx_start
                     )["defects"],
                 )
+
                 penalty.integrate = True
 
             else:
                 continuity -= controller.integrate(
                     x0=controller.states.cx_start,
-                    p=u,
-                    params=controller.parameters.cx,
+                    u=u,
+                    p=controller.parameters.cx_start,
                     s=controller.stochastic_variables.cx_start,
                 )["xf"]
 
@@ -1072,6 +1168,16 @@ class PenaltyFunctionAbstract:
             penalty.multi_thread = True
 
             return continuity
+
+        @staticmethod
+        def first_collocation_point_equals_state(penalty: PenaltyOption, controller: PenaltyController | list):
+            """
+            Insures that the first collocation helper is equal to the states at the shooting node.
+            This is a necessary constraint for COLLOCATION with include_starting_collocation_point.
+            """
+            collocation_helper = controller.states.cx_intermediates_list[0]
+            states = controller.states.cx_start
+            return collocation_helper - states
 
         @staticmethod
         def custom(penalty: PenaltyOption, controller: PenaltyController | list, **parameters: Any):
@@ -1105,6 +1211,7 @@ class PenaltyFunctionAbstract:
                 "custom_function",
                 "weight",
                 "expand",
+                "is_stochastic",
             ]
             for keyword in inspect.signature(penalty.custom_function).parameters:
                 if keyword in invalid_keywords:
@@ -1117,8 +1224,8 @@ class PenaltyFunctionAbstract:
                 ):
                     raise RuntimeError(
                         "You cannot have non linear bounds for custom constraints and min_bound or max_bound defined.\n"
-                        "Please note that you may run into this error message if assume_phase_dynamics "
-                        "was set to False. One workaround is to define your penalty one node at a time instead of "
+                        "Please note that you may run into this error message if phase_dynamics was set "
+                        "to PhaseDynamics.ONE_PER_NODE. One workaround is to define your penalty one node at a time instead of "
                         "using the built-in ALL_SHOOTING (or something similar)."
                     )
                 penalty.min_bound = val[0]
@@ -1302,7 +1409,7 @@ class PenaltyFunctionAbstract:
         raise RuntimeError("penalty_nature cannot be called from an abstract class")
 
     @staticmethod
-    def _get_qddot(controller, attribute: str):
+    def _get_qddot(controller: PenaltyController, attribute: str):
         """
         Returns the generalized acceleration by either fetching it directly
         from the controller's states or controls or from the controller's dynamics.
@@ -1318,37 +1425,25 @@ class PenaltyFunctionAbstract:
             raise ValueError("atrribute should be either mx or cx_start")
 
         if "qddot" not in controller.states and "qddot" not in controller.controls:
-            if controller.motor_noise is not None:
-                motor_noise = controller.motor_noise
-                sensory_noise = controller.sensory_noise
-            else:
-                if attribute == "mx":
-                    motor_noise = MX()
-                    sensory_noise = MX()
-                elif attribute == "cx_start":
-                    motor_noise = controller.cx()
-                    sensory_noise = controller.cx()
-
             return controller.dynamics(
+                getattr(controller.time, attribute),
                 getattr(controller.states, attribute),
                 getattr(controller.controls, attribute),
                 getattr(controller.parameters, attribute),
                 getattr(controller.stochastic_variables, attribute),
-                motor_noise,
-                sensory_noise,
             )[controller.states["qdot"].index, :]
 
         source = controller.states if "qddot" in controller.states else controller.controls
         return getattr(source["qddot"], attribute)
 
     @staticmethod
-    def _get_markers_acceleration(controller, markers, CoM=False):
+    def _get_markers_acceleration(controller: PenaltyController, markers, CoM=False):
         """
         Retrieve the acceleration of either the markers or the center of mass (CoM) from the controller.
 
         Parameters
         ----------
-        controller : object
+        controller
             An object containing 'states' and 'controls' data.
 
         markers : MX
@@ -1368,6 +1463,7 @@ class PenaltyFunctionAbstract:
         return controller.mx_to_cx(
             "com_ddot" if CoM else "markers_acceleration",
             markers,
+            controller.time,
             controller.states["q"],
             controller.states["qdot"],
             last_param,

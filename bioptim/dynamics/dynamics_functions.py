@@ -5,6 +5,7 @@ from .fatigue.fatigue_dynamics import FatigueList
 from ..optimization.optimization_variable import OptimizationVariable
 from ..optimization.non_linear_program import NonLinearProgram
 from .dynamics_evaluation import DynamicsEvaluation
+from ..interfaces.stochastic_bio_model import StochasticBioModel
 
 
 class DynamicsFunctions:
@@ -43,19 +44,23 @@ class DynamicsFunctions:
 
     @staticmethod
     def custom(
-        states: MX.sym, controls: MX.sym, parameters: MX.sym, stochastic_variables: MX.sym, nlp
+        time: MX.sym, states: MX.sym, controls: MX.sym, parameters: MX.sym, stochastic_variables: MX.sym, nlp
     ) -> DynamicsEvaluation:
         """
         Interface to custom dynamic function provided by the user.
 
         Parameters
         ----------
+        time: MX.sym
+            The time of the system
         states: MX.sym
             The state of the system
         controls: MX.sym
             The controls of the system
         parameters: MX.sym
             The parameters of the system
+        stochastic_variables: MX.sym
+            The stochastic_variables of the system
         nlp: NonLinearProgram
             The definition of the system
 
@@ -67,10 +72,11 @@ class DynamicsFunctions:
             The defects of the implicit dynamics
         """
 
-        return nlp.dynamics_type.dynamic_function(states, controls, parameters, stochastic_variables, nlp)
+        return nlp.dynamics_type.dynamic_function(time, states, controls, parameters, stochastic_variables, nlp)
 
     @staticmethod
     def torque_driven(
+        time: MX.sym,
         states: MX.sym,
         controls: MX.sym,
         parameters: MX.sym,
@@ -79,6 +85,7 @@ class DynamicsFunctions:
         with_contact: bool,
         with_passive_torque: bool,
         with_ligament: bool,
+        with_friction: bool,
         rigidbody_dynamics: RigidBodyDynamics,
         fatigue: FatigueList,
     ) -> DynamicsEvaluation:
@@ -87,12 +94,16 @@ class DynamicsFunctions:
 
         Parameters
         ----------
+        time: MX.sym
+            The time of the system
         states: MX.sym
             The state of the system
         controls: MX.sym
             The controls of the system
         parameters: MX.sym
             The parameters of the system
+        stochastic_variables: MX.sym
+            The stochastic_variables of the system
         nlp: NonLinearProgram
             The definition of the system
         with_contact: bool
@@ -101,6 +112,8 @@ class DynamicsFunctions:
             If the dynamic with passive torque should be used
         with_ligament: bool
             If the dynamic with ligament should be used
+        with_friction: bool
+            If the dynamic with friction should be used
         rigidbody_dynamics: RigidBodyDynamics
             which rigidbody dynamics should be used
         fatigue : FatigueList
@@ -120,6 +133,7 @@ class DynamicsFunctions:
         tau = DynamicsFunctions.__get_fatigable_tau(nlp, states, controls, fatigue)
         tau = tau + nlp.model.passive_joint_torque(q, qdot) if with_passive_torque else tau
         tau = tau + nlp.model.ligament_joint_torque(q, qdot) if with_ligament else tau
+        tau = tau + nlp.model.friction_coefficients @ qdot if with_friction else tau
 
         if (
             rigidbody_dynamics == RigidBodyDynamics.DAE_INVERSE_DYNAMICS
@@ -171,6 +185,74 @@ class DynamicsFunctions:
                 defects[dq.shape[0] :, :] = tau - tau_id
 
         return DynamicsEvaluation(dxdt, defects)
+
+    @staticmethod
+    def stochastic_torque_driven(
+        time: MX.sym,
+        states: MX.sym,
+        controls: MX.sym,
+        parameters: MX.sym,
+        stochastic_variables: MX.sym,
+        nlp,
+        with_contact: bool,
+        with_friction: bool,
+    ) -> DynamicsEvaluation:
+        """
+        Forward dynamics subject to motor and sensory noise driven by joint torques, optional external forces can be declared.
+
+        Parameters
+        ----------
+        time: MX.sym
+            The time
+        states: MX.sym
+            The state of the system
+        controls: MX.sym
+            The controls of the system
+        parameters: MX.sym
+            The parameters of the system
+        stochastic_variables: MX.sym
+            The stochastic variables of the system
+        nlp: NonLinearProgram
+            The definition of the system
+        with_contact: bool
+            If the dynamic with contact should be used
+        with_friction: bool
+            If the dynamic with friction should be used
+
+        Returns
+        ----------
+        DynamicsEvaluation
+            The derivative of the states and the defects of the implicit dynamics
+        """
+
+        q = DynamicsFunctions.get(nlp.states["q"], states)
+        qdot = DynamicsFunctions.get(nlp.states["qdot"], states)
+        tau = DynamicsFunctions.get(nlp.controls["tau"], controls)
+
+        ref = DynamicsFunctions.get(nlp.stochastic_variables["ref"], stochastic_variables)
+        k = DynamicsFunctions.get(nlp.stochastic_variables["k"], stochastic_variables)
+        k_matrix = StochasticBioModel.reshape_to_matrix(k, nlp.model.matrix_shape_k)
+
+        sensory_input = nlp.model.sensory_reference(states, controls, parameters, stochastic_variables, nlp)
+
+        mapped_motor_noise = nlp.model.motor_noise_sym
+        mapped_sensory_feedback_torque = k_matrix @ ((sensory_input - ref) + nlp.model.sensory_noise_sym)
+        if "tau" in nlp.model.motor_noise_mapping.keys():
+            mapped_motor_noise = nlp.model.motor_noise_mapping["tau"].to_second.map(nlp.model.motor_noise_sym)
+            mapped_sensory_feedback_torque = nlp.model.motor_noise_mapping["tau"].to_second.map(
+                mapped_sensory_feedback_torque
+            )
+        tau += mapped_motor_noise + mapped_sensory_feedback_torque
+        tau = tau + nlp.model.friction_coefficients @ qdot if with_friction else tau
+
+        # dq = DynamicsFunctions.compute_qdot(nlp, q, qdot)
+        dq = qdot
+        ddq = DynamicsFunctions.forward_dynamics(nlp, q, qdot, tau, with_contact)
+        dxdt = MX(nlp.states.shape, ddq.shape[1])
+        dxdt[nlp.states["q"].index, :] = horzcat(*[dq for _ in range(ddq.shape[1])])
+        dxdt[nlp.states["qdot"].index, :] = ddq
+
+        return DynamicsEvaluation(dxdt=dxdt, defects=None)
 
     @staticmethod
     def __get_fatigable_tau(nlp: NonLinearProgram, states: MX, controls: MX, fatigue: FatigueList) -> MX:
@@ -230,6 +312,7 @@ class DynamicsFunctions:
 
     @staticmethod
     def torque_activations_driven(
+        time: MX.sym,
         states: MX.sym,
         controls: MX.sym,
         parameters: MX.sym,
@@ -245,12 +328,16 @@ class DynamicsFunctions:
 
         Parameters
         ----------
+        time: MX.sym
+            The time of the system
         states: MX.sym
             The state of the system
         controls: MX.sym
             The controls of the system
         parameters: MX.sym
             The parameters of the system
+        stochastic_variables: MX.sym
+            The stochastic_variables of the system
         nlp: NonLinearProgram
             The definition of the system
         with_contact: bool
@@ -289,6 +376,7 @@ class DynamicsFunctions:
 
     @staticmethod
     def torque_derivative_driven(
+        time: MX.sym,
         states: MX.sym,
         controls: MX.sym,
         parameters: MX.sym,
@@ -304,12 +392,16 @@ class DynamicsFunctions:
 
         Parameters
         ----------
+        time: MX.sym
+            The time of the system
         states: MX.sym
             The state of the system
         controls: MX.sym
             The controls of the system
         parameters: MX.sym
             The parameters of the system
+        stochastic_variables: MX.sym
+            The stochastic_variables of the system
         nlp: NonLinearProgram
             The definition of the system
         rigidbody_dynamics: RigidBodyDynamics
@@ -360,6 +452,7 @@ class DynamicsFunctions:
 
     @staticmethod
     def forces_from_torque_driven(
+        time: MX.sym,
         states: MX.sym,
         controls: MX.sym,
         parameters: MX.sym,
@@ -373,6 +466,8 @@ class DynamicsFunctions:
 
         Parameters
         ----------
+        time: MX.sym
+            The time of the system
         states: MX.sym
             The state of the system
         controls: MX.sym
@@ -408,6 +503,7 @@ class DynamicsFunctions:
 
     @staticmethod
     def forces_from_torque_activation_driven(
+        time: MX.sym,
         states: MX.sym,
         controls: MX.sym,
         parameters: MX.sym,
@@ -421,12 +517,16 @@ class DynamicsFunctions:
 
         Parameters
         ----------
+        time: MX.sym
+            The time of the system
         states: MX.sym
             The state of the system
         controls: MX.sym
             The controls of the system
         parameters: MX.sym
             The parameters of the system
+        stochastic_variables: MX.sym
+            The stochastic_variables of the system
         nlp: NonLinearProgram
             The definition of the system
         with_passive_torque: bool
@@ -454,6 +554,7 @@ class DynamicsFunctions:
 
     @staticmethod
     def muscles_driven(
+        time: MX.sym,
         states: MX.sym,
         controls: MX.sym,
         parameters: MX.sym,
@@ -471,12 +572,16 @@ class DynamicsFunctions:
 
         Parameters
         ----------
+        time: MX.sym
+            The time of the system
         states: MX.sym
             The state of the system
         controls: MX.sym
             The controls of the system
         parameters: MX.sym
             The parameters of the system
+        stochastic_variables: MX.sym
+            The stochastic_variables of the system
         nlp: NonLinearProgram
             The definition of the system
         with_contact: bool
@@ -593,6 +698,7 @@ class DynamicsFunctions:
 
     @staticmethod
     def forces_from_muscle_driven(
+        time: MX.sym,
         states: MX.sym,
         controls: MX.sym,
         parameters: MX.sym,
@@ -606,12 +712,16 @@ class DynamicsFunctions:
 
         Parameters
         ----------
+        time: MX.sym
+            The time of the system
         states: MX.sym
             The state of the system
         controls: MX.sym
             The controls of the system
         parameters: MX.sym
             The parameters of the system
+        stochastic_variables: MX.sym
+            The stochastic_variables of the system
         nlp: NonLinearProgram
             The definition of the system
         with_passive_torque: bool
@@ -640,6 +750,7 @@ class DynamicsFunctions:
 
     @staticmethod
     def joints_acceleration_driven(
+        time: MX.sym,
         states: MX.sym,
         controls: MX.sym,
         parameters: MX.sym,
@@ -652,12 +763,16 @@ class DynamicsFunctions:
 
         Parameters
         ----------
+        time: MX.sym
+            The time of the system
         states: MX.sym
             The state of the system
         controls: MX.sym
             The controls of the system
         parameters: MX.sym
             The parameters of the system
+        stochastic_variables: MX.sym
+            The stochastic_variables of the system
         nlp: NonLinearProgram
             The definition of the system
         rigidbody_dynamics: RigidBodyDynamics
@@ -841,7 +956,7 @@ class DynamicsFunctions:
         Torques in tau
         """
 
-        if len(nlp.external_forces) != 0:
+        if nlp.external_forces is not None and len(nlp.external_forces) != 0:
             if "tau" in nlp.states:
                 tau_shape = nlp.states["tau"].mx.shape[0]
             elif "tau" in nlp.controls:
@@ -913,24 +1028,27 @@ class DynamicsFunctions:
 
     @staticmethod
     def holonomic_torque_driven(
-        states: MX | SX,
-        controls: MX | SX,
-        parameters: MX | SX,
-        stochastic_variables: MX | SX,
+        time: MX.sym,
+        states: MX.sym,
+        controls: MX.sym,
+        parameters: MX.sym,
+        stochastic_variables: MX.sym,
         nlp: NonLinearProgram,
     ) -> DynamicsEvaluation:
         """
-        The custom dynamics function that provides the derivative of the states: dxdt = f(x, u, p)
+        The custom dynamics function that provides the derivative of the states: dxdt = f(t, x, u, p, s)
 
         Parameters
         ----------
-        states: MX | SX
+        time: MX.sym
+            The time of the system
+        states: MX.sym
             The state of the system
-        controls: MX | SX
+        controls: MX.sym
             The controls of the system
-        parameters: MX | SX
+        parameters: MX.sym
             The parameters acting on the system
-        stochastic_variables: MX | SX
+        stochastic_variables: MX.sym
             The stochastic variables of the system
         nlp: NonLinearProgram
             A reference to the phase

@@ -1,6 +1,5 @@
 from typing import Callable, Any
-from casadi import DM, horzcat, MX_eye, jacobian, Function, MX, vertcat
-from numpy import sqrt
+from casadi import MX_eye, jacobian, Function, MX, vertcat
 
 from .constraints import PenaltyOption
 from .objective_functions import ObjectiveFunction
@@ -9,6 +8,7 @@ from ..misc.enums import Node, PenaltyType
 from ..misc.fcn_enum import FcnEnum
 from ..misc.options import UniquePerPhaseOptionList
 from ..misc.mapping import BiMapping
+from ..interfaces.stochastic_bio_model import StochasticBioModel
 
 
 class MultinodePenalty(PenaltyOption):
@@ -202,6 +202,47 @@ class MultinodePenaltyFunctions(PenaltyFunctionAbstract):
             return out
 
         @staticmethod
+        def stochastic_equality(
+            penalty,
+            controllers: list[PenaltyController, ...],
+            key: str = "all",
+        ):
+            """
+            The most common continuity function, that is the covariance before equals covariance after for stochastic ocp
+
+            Parameters
+            ----------
+            penalty : MultinodePenalty
+                A reference to the penalty
+            controllers: list
+                The penalty node elements
+
+            Returns
+            -------
+            The difference between the state after and before
+            """
+
+            MultinodePenaltyFunctions.Functions._prepare_controller_cx(controllers)
+
+            ctrl_0 = controllers[0]
+            stochastic_0 = ctrl_0.stochastic_variables[key].cx
+            out = ctrl_0.cx.zeros(stochastic_0.shape)
+            for i in range(1, len(controllers)):
+                ctrl_i = controllers[i]
+                stochastic_i = ctrl_i.stochastic_variables[key].cx
+
+                if stochastic_0.shape != stochastic_i.shape:
+                    raise RuntimeError(
+                        f"Continuity can't be established since the number of x to be matched is {stochastic_0.shape} in "
+                        f"the pre-transition phase and {stochastic_i.shape} post-transition phase. Please use a custom "
+                        f"transition or supply states_mapping"
+                    )
+
+                out += stochastic_0 - stochastic_i
+
+            return out
+
+        @staticmethod
         def com_equality(penalty, controllers: list[PenaltyController, ...]):
             """
             The centers of mass are equals for the specified phases and the specified nodes
@@ -309,9 +350,6 @@ class MultinodePenaltyFunctions(PenaltyFunctionAbstract):
         def stochastic_helper_matrix_explicit(
             penalty,
             controllers: list[PenaltyController, PenaltyController],
-            dynamics: Callable,
-            motor_noise_magnitude: DM,
-            sensory_noise_magnitude: DM,
         ):
             """
             This functions constrain the helper matrix to its actual value as in Gillis 2013.
@@ -319,21 +357,14 @@ class MultinodePenaltyFunctions(PenaltyFunctionAbstract):
             0 = df/dz - dg/dz @ M
             Note that here, we assume that the only z (collocation states) is the next interval states, therefore M is
             not computed at the same node as the other values.
-            TODO: Charbie -> This implementation is only true for Trapezoidal, should generalize for collocations
 
             Parameters
             ----------
             penalty : MultinodePenalty
                 A reference to the phase penalty
             controllers: list[PenaltyController, PenaltyController]
-                    The penalty node elements
-            dynamics: Callable
-                The states dynamics function
-            motor_noise_magnitude: DM
-                The magnitude of the motor noise
-            sensory_noise_magnitude: DM
-                The magnitude of the sensory noise
             """
+
             if not controllers[0].get_nlp.is_stochastic:
                 raise RuntimeError("This function is only valid for stochastic problems")
             if controllers[0].phase_idx != controllers[1].phase_idx:
@@ -341,53 +372,47 @@ class MultinodePenaltyFunctions(PenaltyFunctionAbstract):
 
             dt = controllers[0].tf / controllers[0].ns
 
-            # TODO: Charbie -> This is only True for not mapped variables (have to think on how to generalize it)
-            nx = controllers[0].states.cx_start.shape[0]
-
-            M_matrix = (
-                controllers[0]
-                .stochastic_variables["m"]
-                .reshape_to_matrix(controllers[0].stochastic_variables, nx, nx, Node.START, "m")
+            M_matrix = StochasticBioModel.reshape_to_matrix(
+                controllers[0].stochastic_variables["m"].cx_start, controllers[0].model.matrix_shape_m
             )
 
-            dx = dynamics(
+            dx = controllers[0].extra_dynamics(0)(
+                controllers[0].time.cx,
                 controllers[0].states.cx_start,
                 controllers[0].controls.cx_start,
                 controllers[0].parameters.cx_start,
                 controllers[0].stochastic_variables.cx_start,
-                controllers[0].get_nlp,
-                controllers[0].motor_noise,
-                controllers[0].sensory_noise,
-                with_gains=True,
             )
 
             DdZ_DX_fun = Function(
                 "DdZ_DX_fun",
                 [
+                    controllers[0].time.cx,
                     controllers[0].states.cx_start,
                     controllers[0].controls.cx_start,
                     controllers[0].parameters.cx_start,
                     controllers[0].stochastic_variables.cx_start,
-                    controllers[0].motor_noise,
-                    controllers[0].sensory_noise,
+                    controllers[0].model.motor_noise_sym,
+                    controllers[0].model.sensory_noise_sym,
                 ],
-                [jacobian(dx.dxdt, controllers[0].states.cx_start)],
+                [jacobian(dx, controllers[0].states.cx_start)],
             )
 
             DdZ_DX = DdZ_DX_fun(
+                controllers[1].time.cx,
                 controllers[1].states.cx_start,
                 controllers[1].controls.cx_start,
                 controllers[1].parameters.cx_start,
                 controllers[1].stochastic_variables.cx_start,
-                motor_noise_magnitude,
-                sensory_noise_magnitude,
+                controllers[1].model.motor_noise_magnitude,
+                controllers[1].model.sensory_noise_magnitude,
             )
 
             DG_DZ = MX_eye(DdZ_DX.shape[0]) - DdZ_DX * dt / 2
 
-            val = M_matrix @ DG_DZ - MX_eye(nx)
+            val = M_matrix @ DG_DZ - MX_eye(M_matrix.shape[0])
 
-            out_vector = controllers[0].stochastic_variables["m"].reshape_to_vector(val)
+            out_vector = StochasticBioModel.reshape_to_vector(val)
             return out_vector
 
         @staticmethod
@@ -401,7 +426,6 @@ class MultinodePenaltyFunctions(PenaltyFunctionAbstract):
             0 = df/dz - dg/dz @ M
             Note that here, we assume that the only z (collocation states) is the next interval states, therefore M is
             not computed at the same node as the other values.
-            TODO: Charbie -> This implementation is only true for Trapezoidal, should generalize for collocations
 
             Parameters
             ----------
@@ -409,12 +433,6 @@ class MultinodePenaltyFunctions(PenaltyFunctionAbstract):
                 A reference to the phase penalty
             controllers: list[PenaltyController, PenaltyController]
                     The penalty node elements
-            dynamics: Callable
-                The states dynamics function
-            motor_noise_magnitude: DM
-                The magnitude of the motor noise
-            sensory_noise_magnitude: DM
-                The magnitude of the sensory noise
             """
             if not controllers[0].get_nlp.is_stochastic:
                 raise RuntimeError("This function is only valid for stochastic problems")
@@ -424,70 +442,52 @@ class MultinodePenaltyFunctions(PenaltyFunctionAbstract):
             dt = controllers[0].tf / controllers[0].ns
 
             # TODO: Charbie -> This is only True for x=[q, qdot], u=[tau] (have to think on how to generalize it)
-            nu = len(controllers[0].get_nlp.variable_mappings["tau"].to_first.map_idx)
-            m_matrix = (
-                controllers[0]
-                .stochastic_variables["m"]
-                .reshape_to_matrix(controllers[0].stochastic_variables, 2 * nu, 2 * nu, Node.START, "m")
+            nu = controllers[0].model.nb_q - controllers[0].model.nb_root
+            m_matrix = StochasticBioModel.reshape_to_matrix(
+                controllers[0].stochastic_variables["m"].cx_start, controllers[0].model.matrix_shape_m
             )
-            a_plus_matrix = (
-                controllers[1]
-                .stochastic_variables["a"]
-                .reshape_to_matrix(controllers[1].stochastic_variables, 2 * nu, 2 * nu, Node.START, "a")
+            a_plus_matrix = StochasticBioModel.reshape_to_matrix(
+                controllers[1].stochastic_variables["a"].cx_start, controllers[1].model.matrix_shape_a
             )
 
             DG_DZ = MX_eye(a_plus_matrix.shape[0]) - a_plus_matrix * dt / 2
 
             val = m_matrix @ DG_DZ - MX_eye(2 * nu)
 
-            out_vector = controllers[0].stochastic_variables["m"].reshape_to_vector(val)
+            out_vector = StochasticBioModel.reshape_to_vector(val)
             return out_vector
 
         @staticmethod
         def stochastic_covariance_matrix_continuity_implicit(
             penalty,
             controllers: list[PenaltyController, PenaltyController],
-            motor_noise_magnitude: DM,
-            sensory_noise_magnitude: DM,
         ):
             """
             This functions allows to implicitly integrate the covariance matrix.
             P_k+1 = M_k @ (dg/dx @ P @ dg/dx + dg/dw @ sigma_w @ dg/dw) @ M_k
             """
+            # TODO: Charbie -> This is only True for x=[q, qdot], u=[tau] (have to think on how to generalize it)
 
             if not controllers[0].get_nlp.is_stochastic:
                 raise RuntimeError("This function is only valid for stochastic problems")
 
-            # TODO: Charbie -> This is only True for x=[q, qdot], u=[tau] (have to think on how to generalize it)
-            nu = len(controllers[0].get_nlp.variable_mappings["tau"].to_first.map_idx)
-
-            cov_matrix = (
-                controllers[0]
-                .stochastic_variables["cov"]
-                .reshape_to_matrix(controllers[0].stochastic_variables, 2 * nu, 2 * nu, Node.START, "cov")
+            cov_matrix = StochasticBioModel.reshape_to_matrix(
+                controllers[0].stochastic_variables["cov"].cx_start, controllers[0].model.matrix_shape_cov
             )
-            cov_matrix_next = (
-                controllers[1]
-                .stochastic_variables["cov"]
-                .reshape_to_matrix(controllers[1].stochastic_variables, 2 * nu, 2 * nu, Node.START, "cov")
+            cov_matrix_next = StochasticBioModel.reshape_to_matrix(
+                controllers[1].stochastic_variables["cov"].cx_start, controllers[1].model.matrix_shape_cov
             )
-            a_matrix = (
-                controllers[0]
-                .stochastic_variables["a"]
-                .reshape_to_matrix(controllers[0].stochastic_variables, 2 * nu, 2 * nu, Node.START, "a")
+            a_matrix = StochasticBioModel.reshape_to_matrix(
+                controllers[0].stochastic_variables["a"].cx_start, controllers[0].model.matrix_shape_a
             )
-            c_matrix = (
-                controllers[0]
-                .stochastic_variables["c"]
-                .reshape_to_matrix(controllers[0].stochastic_variables, 2 * nu, 3 * nu, Node.START, "c")
+            c_matrix = StochasticBioModel.reshape_to_matrix(
+                controllers[0].stochastic_variables["c"].cx_start, controllers[0].model.matrix_shape_c
             )
-            m_matrix = (
-                controllers[0]
-                .stochastic_variables["m"]
-                .reshape_to_matrix(controllers[0].stochastic_variables, 2 * nu, 2 * nu, Node.START, "m")
+            m_matrix = StochasticBioModel.reshape_to_matrix(
+                controllers[0].stochastic_variables["m"].cx_start, controllers[0].model.matrix_shape_m
             )
 
-            sigma_w = vertcat(sensory_noise_magnitude, motor_noise_magnitude)
+            sigma_w = vertcat(controllers[0].model.sensory_noise_magnitude, controllers[0].model.motor_noise_magnitude)
             dt = controllers[0].tf / controllers[0].ns
             dg_dw = -dt * c_matrix
             dg_dx = -MX_eye(a_matrix.shape[0]) - dt / 2 * a_matrix
@@ -495,22 +495,19 @@ class MultinodePenaltyFunctions(PenaltyFunctionAbstract):
             cov_next_computed = m_matrix @ (dg_dx @ cov_matrix @ dg_dx.T + dg_dw @ sigma_w @ dg_dw.T) @ m_matrix.T
             cov_implicit_deffect = cov_next_computed - cov_matrix_next
 
-            out_vector = controllers[0].integrated_values["cov"].reshape_to_vector(cov_implicit_deffect)
+            out_vector = StochasticBioModel.reshape_to_vector(cov_implicit_deffect)
             return out_vector
 
         @staticmethod
-        def stochastic_dg_dw_implicit(
+        def stochastic_df_dw_implicit(
             penalty,
             controllers: list[PenaltyController],
-            dynamics: Callable,
-            motor_noise_magnitude: DM,
-            sensory_noise_magnitude: DM,
         ):
             """
             This function constrains the stochastic matrix C to its actual value which is
-            A = dG/dw
-            TODO: Charbie -> This is only true for trapezoidal integration
+            C = df/dw
             """
+            # TODO: Charbie -> This is only True for x=[q, qdot], u=[tau] (have to think on how to generalize it)
 
             if not controllers[0].get_nlp.is_stochastic:
                 raise RuntimeError("This function is only valid for stochastic problems")
@@ -518,13 +515,10 @@ class MultinodePenaltyFunctions(PenaltyFunctionAbstract):
             dt = controllers[0].tf / controllers[0].ns
 
             nb_root = controllers[0].model.nb_root
-            # TODO: Charbie -> This is only True for x=[q, qdot], u=[tau] (have to think on how to generalize it)
-            nu = len(controllers[0].get_nlp.variable_mappings["tau"].to_first.map_idx)
+            nu = controllers[0].model.nb_q - controllers[0].model.nb_root
 
-            c_matrix = (
-                controllers[0]
-                .stochastic_variables["c"]
-                .reshape_to_matrix(controllers[0].stochastic_variables, 2 * nu, 3 * nu, Node.START, "c")
+            c_matrix = StochasticBioModel.reshape_to_matrix(
+                controllers[0].stochastic_variables["c"].cx_start, controllers[0].model.matrix_shape_c
             )
 
             q_root = MX.sym("q_root", nb_root, 1)
@@ -535,15 +529,12 @@ class MultinodePenaltyFunctions(PenaltyFunctionAbstract):
             parameters_sym = MX.sym("parameters_sym", controllers[0].parameters.shape, 1)
             stochastic_sym = MX.sym("stochastic_sym", controllers[0].stochastic_variables.shape, 1)
 
-            dx = dynamics(
+            dx = controllers[0].extra_dynamics(0)(
+                controllers[0].time.mx,
                 vertcat(q_root, q_joints, qdot_root, qdot_joints),  # States
                 tau_joints,
                 parameters_sym,
                 stochastic_sym,
-                controllers[0].get_nlp,
-                controllers[0].motor_noise,
-                controllers[0].sensory_noise,
-                with_gains=True,
             )
 
             non_root_index = list(range(nb_root, nb_root + nu)) + list(
@@ -553,6 +544,7 @@ class MultinodePenaltyFunctions(PenaltyFunctionAbstract):
             DF_DW_fun = Function(
                 "DF_DW_fun",
                 [
+                    controllers[0].time.mx,
                     q_root,
                     q_joints,
                     qdot_root,
@@ -560,13 +552,19 @@ class MultinodePenaltyFunctions(PenaltyFunctionAbstract):
                     tau_joints,
                     parameters_sym,
                     stochastic_sym,
-                    controllers[0].motor_noise,
-                    controllers[0].sensory_noise,
+                    controllers[0].model.motor_noise_sym,
+                    controllers[0].model.sensory_noise_sym,
                 ],
-                [jacobian(dx.dxdt[non_root_index], vertcat(controllers[0].motor_noise, controllers[0].sensory_noise))],
+                [
+                    jacobian(
+                        dx[non_root_index],
+                        vertcat(controllers[0].model.motor_noise_sym, controllers[0].model.sensory_noise_sym),
+                    )
+                ],
             )
 
             DF_DW = DF_DW_fun(
+                controllers[0].time.cx,
                 controllers[0].states["q"].cx_start[:nb_root],
                 controllers[0].states["q"].cx_start[nb_root:],
                 controllers[0].states["qdot"].cx_start[:nb_root],
@@ -574,10 +572,11 @@ class MultinodePenaltyFunctions(PenaltyFunctionAbstract):
                 controllers[0].controls["tau"].cx_start,
                 controllers[0].parameters.cx_start,
                 controllers[0].stochastic_variables.cx_start,
-                motor_noise_magnitude,
-                sensory_noise_magnitude,
+                controllers[0].model.motor_noise_magnitude,
+                controllers[0].model.sensory_noise_magnitude,
             )
             DF_DW_plus = DF_DW_fun(
+                controllers[1].time.cx,
                 controllers[1].states["q"].cx_start[:nb_root],
                 controllers[1].states["q"].cx_start[nb_root:],
                 controllers[1].states["qdot"].cx_start[:nb_root],
@@ -585,197 +584,13 @@ class MultinodePenaltyFunctions(PenaltyFunctionAbstract):
                 controllers[1].controls.cx_start,
                 controllers[1].parameters.cx_start,
                 controllers[1].stochastic_variables.cx_start,
-                motor_noise_magnitude,
-                sensory_noise_magnitude,
+                controllers[1].model.motor_noise_magnitude,
+                controllers[1].model.sensory_noise_magnitude,
             )
 
             out = c_matrix - (-(DF_DW + DF_DW_plus) / 2 * dt)
 
-            out_vector = controllers[0].stochastic_variables["c"].reshape_to_vector(out)
-            return out_vector
-
-        @staticmethod
-        def stochastic_covariance_matrix_continuity_collocation(
-            penalty,
-            controllers: list[PenaltyController, PenaltyController],
-            motor_noise_magnitude: DM,
-            sensory_noise_magnitude: DM,
-        ):
-            """
-            This functions allows to implicitly integrate the covariance matrix as in Gillis 2013.
-            It is explained in more details here: https://doi.org/10.1109/CDC.2013.6761121
-            P_k+1 = M_k @ (dg/dx @ P_k @ dg/dx + dg/dw @ sigma_w @ dg/dw) @ M_k
-            """
-
-            if not controllers[0].get_nlp.is_stochastic:
-                raise RuntimeError("This function is only valid for stochastic problems")
-
-            polynomial_degree = controllers[0].get_nlp.ode_solver.polynomial_degree
-            nb_root = controllers[0].model.nb_root
-            # TODO: Charbie -> This is only True for x=[q, qdot], u=[tau] (have to think on how to generalize it)
-            nu = len(controllers[0].get_nlp.variable_mappings["tau"].to_first.map_idx)
-            non_root_index_continuity = []
-            non_root_index_defects = []
-            for i in range(2):
-                for j in range(polynomial_degree + 1):
-                    non_root_index_defects += list(
-                        range(
-                            (nb_root + nu) * (i * (polynomial_degree + 1) + j) + nb_root,
-                            (nb_root + nu) * (i * (polynomial_degree + 1) + j) + nb_root + nu,
-                        )
-                    )
-                non_root_index_continuity += list(
-                    range((nb_root + nu) * i + nb_root, (nb_root + nu) * i + nb_root + nu)
-                )
-
-            if "cholesky_cov" in controllers[0].stochastic_variables.keys():
-                l_cov_matrix = (
-                    controllers[0]
-                    .stochastic_variables["cholesky_cov"]
-                    .reshape_to_cholesky_matrix(controllers[0].stochastic_variables, 2 * nu, Node.START, "cholesky_cov")
-                )
-                l_cov_matrix_next = (
-                    controllers[1]
-                    .stochastic_variables["cholesky_cov"]
-                    .reshape_to_cholesky_matrix(controllers[1].stochastic_variables, 2 * nu, Node.START, "cholesky_cov")
-                )
-                cov_matrix = l_cov_matrix @ l_cov_matrix.T
-                cov_matrix_next = l_cov_matrix_next @ l_cov_matrix_next.T
-            else:
-                cov_matrix = (
-                    controllers[0]
-                    .stochastic_variables["cov"]
-                    .reshape_to_matrix(controllers[0].stochastic_variables, 2 * nu, 2 * nu, Node.START, "cov")
-                )
-                cov_matrix_next = (
-                    controllers[1]
-                    .stochastic_variables["cov"]
-                    .reshape_to_matrix(controllers[1].stochastic_variables, 2 * nu, 2 * nu, Node.START, "cov")
-                )
-            m_matrix = (
-                controllers[0]
-                .stochastic_variables["m"]
-                .reshape_to_matrix(
-                    controllers[0].stochastic_variables, 2 * nu, 2 * nu * (polynomial_degree + 1), Node.START, "m"
-                )
-            )
-
-            x_q_root = controllers[0].cx.sym("x_q_root", nb_root, 1)
-            x_q_joints = controllers[0].cx.sym("x_q_joints", nu, 1)
-            x_qdot_root = controllers[0].cx.sym("x_qdot_root", nb_root, 1)
-            x_qdot_joints = controllers[0].cx.sym("x_qdot_joints", nu, 1)
-            z_q_root = controllers[0].cx.sym("z_q_root", nb_root, polynomial_degree)
-            z_q_joints = controllers[0].cx.sym("z_q_joints", nu, polynomial_degree)
-            z_qdot_root = controllers[0].cx.sym("z_qdot_root", nb_root, polynomial_degree)
-            z_qdot_joints = controllers[0].cx.sym("z_qdot_joints", nu, polynomial_degree)
-
-            states_full = vertcat(
-                horzcat(x_q_root, z_q_root),
-                horzcat(x_q_joints, z_q_joints),
-                horzcat(x_qdot_root, z_qdot_root),
-                horzcat(x_qdot_joints, z_qdot_joints),
-            )
-            dynamics = controllers[0].integrate_noised_dynamics(
-                x0=states_full,
-                p=controllers[0].controls.cx_start,
-                params=controllers[0].parameters.cx_start,
-                s=controllers[0].stochastic_variables.cx_start,
-                motor_noise=controllers[0].motor_noise,
-                sensory_noise=controllers[0].sensory_noise,
-            )
-
-            initial_polynomial_evaluation = vertcat(x_q_root, x_q_joints, x_qdot_root, x_qdot_joints)
-            defects = dynamics["defects"]
-            defects = vertcat(initial_polynomial_evaluation, defects)[non_root_index_defects]
-
-            sigma_w = vertcat(controllers[0].sensory_noise, controllers[0].motor_noise)
-            sigma_matrix = sigma_w * MX_eye(sigma_w.shape[0])
-
-            dg_dx = jacobian(defects, vertcat(x_q_joints, x_qdot_joints))
-            dg_dw = jacobian(defects, sigma_w)
-
-            dg_dx_fun = Function(
-                "dg_dx",
-                [
-                    x_q_root,
-                    x_q_joints,
-                    x_qdot_root,
-                    x_qdot_joints,
-                    z_q_root,
-                    z_q_joints,
-                    z_qdot_root,
-                    z_qdot_joints,
-                    controllers[0].controls.cx_start,
-                    controllers[0].parameters.cx_start,
-                    controllers[0].stochastic_variables.cx_start,
-                    controllers[0].motor_noise,
-                    controllers[0].sensory_noise,
-                ],
-                [dg_dx],
-            )
-            non_sym_states = horzcat(*([controllers[0].states.cx_start] + controllers[0].states.cx_intermediates_list))
-            dg_dx_evaluated = dg_dx_fun(
-                non_sym_states[:nb_root, 0],
-                non_sym_states[nb_root : nb_root + nu, 0],
-                non_sym_states[nb_root + nu : 2 * nb_root + nu, 0],
-                non_sym_states[2 * nb_root + nu :, 0],
-                non_sym_states[:nb_root, 1:],
-                non_sym_states[nb_root : nb_root + nu, 1:],
-                non_sym_states[nb_root + nu : 2 * nb_root + nu, 1:],
-                non_sym_states[2 * nb_root + nu :, 1:],
-                controllers[0].controls.cx_start,
-                controllers[0].parameters.cx_start,
-                controllers[0].stochastic_variables.cx_start,
-                motor_noise_magnitude,
-                sensory_noise_magnitude,
-            )
-
-            dg_dw_fun = Function(
-                "dg_dw",
-                [
-                    x_q_root,
-                    x_q_joints,
-                    x_qdot_root,
-                    x_qdot_joints,
-                    z_q_root,
-                    z_q_joints,
-                    z_qdot_root,
-                    z_qdot_joints,
-                    controllers[0].controls.cx_start,
-                    controllers[0].parameters.cx_start,
-                    controllers[0].stochastic_variables.cx_start,
-                    controllers[0].motor_noise,
-                    controllers[0].sensory_noise,
-                ],
-                [dg_dw],
-            )
-            dg_dw_evaluated = dg_dw_fun(
-                non_sym_states[:nb_root, 0],
-                non_sym_states[nb_root : nb_root + nu, 0],
-                non_sym_states[nb_root + nu : 2 * nb_root + nu, 0],
-                non_sym_states[2 * nb_root + nu :, 0],
-                non_sym_states[:nb_root, 1:],
-                non_sym_states[nb_root : nb_root + nu, 1:],
-                non_sym_states[nb_root + nu : 2 * nb_root + nu, 1:],
-                non_sym_states[2 * nb_root + nu :, 1:],
-                controllers[0].controls.cx_start,
-                controllers[0].parameters.cx_start,
-                controllers[0].stochastic_variables.cx_start,
-                motor_noise_magnitude,
-                sensory_noise_magnitude,
-            )
-
-            cov_next_computed = (
-                m_matrix
-                @ (
-                    dg_dx_evaluated @ cov_matrix @ dg_dx_evaluated.T
-                    + dg_dw_evaluated @ sigma_matrix @ dg_dw_evaluated.T
-                )
-                @ m_matrix.T
-            )
-            cov_implicit_deffect = cov_next_computed - cov_matrix_next
-
-            out_vector = controllers[0].stochastic_variables["m"].reshape_to_vector(cov_implicit_deffect)
+            out_vector = StochasticBioModel.reshape_to_vector(out)
             return out_vector
 
         @staticmethod
@@ -802,8 +617,8 @@ class MultinodePenaltyFunctions(PenaltyFunctionAbstract):
         def _prepare_controller_cx(controllers: list[PenaltyController, ...]):
             """
             Prepare the current_cx_to_get for each of the controller. Basically it finds if this penalty as more than
-            one usage. If it does, it increments a counter of the cx used, up to the maximum. On assume_phase_dynamics
-            being False, this is useless, as all the penalties uses cx_start.
+            one usage. If it does, it increments a counter of the cx used, up to the maximum. On phase_dynamics
+            being PhaseDynamics.ONE_PER_NODE, this is useless, as all the penalties uses cx_start.
             """
             existing_phases = []
             for controller in controllers:

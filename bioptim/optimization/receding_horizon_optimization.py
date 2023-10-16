@@ -230,7 +230,6 @@ class RecedingHorizonOptimization(OptimalControlProgram):
             ode_solver=self.nlp[0].ode_solver,
             n_shooting=self.total_optimization_run - 1,
             phase_time=self.total_optimization_run * self.nlp[0].dt,
-            skip_continuity=True,
             x_bounds=self.nlp[0].x_bounds,
             u_bounds=self.nlp[0].u_bounds,
             x_init=x_init,
@@ -459,7 +458,6 @@ class CyclicRecedingHorizonOptimization(RecedingHorizonOptimization):
             x_init=x_init,
             u_init=u_init,
             s_init=s_init,
-            skip_continuity=True,
             use_sx=self.original_values["use_sx"],
         )
         return Solution(solution_ocp, [x_init, u_init_for_solution, p_init, s_init])
@@ -693,7 +691,6 @@ class MultiCyclicRecedingHorizonOptimization(CyclicRecedingHorizonOptimization):
             objective_functions=deepcopy(self.original_values["objective_functions"]),
             n_shooting=self.cycle_len * self.total_optimization_run - 1,
             phase_time=(self.cycle_len * self.total_optimization_run - 1) * self.nlp[0].dt,
-            skip_continuity=True,
             x_init=x_init,
             u_init=u_init,
             s_init=s_init,
@@ -726,8 +723,8 @@ class MultiCyclicRecedingHorizonOptimization(CyclicRecedingHorizonOptimization):
         model_class = original_values["bio_model"][0][0]
         model_initializer = original_values["bio_model"][0][1]
 
-        p_init = InitialGuessList()
         s_init = InitialGuessList()
+        p_init = InitialGuessList()
         solution_ocp = OptimalControlProgram(
             bio_model=model_class(**model_initializer),
             dynamics=original_values["dynamics"][0],
@@ -735,7 +732,6 @@ class MultiCyclicRecedingHorizonOptimization(CyclicRecedingHorizonOptimization):
             ode_solver=self.nlp[0].ode_solver,
             n_shooting=self.cycle_len,
             phase_time=self.cycle_len * self.nlp[0].dt,
-            skip_continuity=True,
             x_init=x_init,
             u_init=u_init,
             s_init=s_init,

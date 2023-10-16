@@ -54,6 +54,7 @@ from ..misc.enums import (
     InterpolationType,
     PenaltyType,
     Node,
+    PhaseDynamics,
 )
 from ..misc.mapping import BiMappingList, Mapping, BiMapping, NodeMappingList
 from ..misc.options import OptionDict
@@ -160,7 +161,7 @@ class OptimalControlProgram:
         parameter_init: InitialGuessList = None,
         parameter_objectives: ParameterObjectiveList = None,
         parameter_constraints: ParameterConstraintList = None,
-        external_forces: list[list[Any], ...] | tuple[list[Any], ...] = None,
+        external_forces: tuple[tuple[Any], ...] | list[list[Any]] = None,
         ode_solver: list | OdeSolverBase | OdeSolver = None,
         control_type: ControlType | list = ControlType.CONSTANT,
         variable_mappings: BiMappingList = None,
@@ -174,11 +175,8 @@ class OptimalControlProgram:
         xdot_scaling: VariableScalingList = None,
         u_scaling: VariableScalingList = None,
         s_scaling: VariableScalingList = None,
-        state_continuity_weight: float = None,  # TODO: docstring
         n_threads: int = 1,
         use_sx: bool = False,
-        skip_continuity: bool = False,
-        assume_phase_dynamics: bool = False,
         integrated_value_functions: dict[str, Callable] = None,
     ):
         """
@@ -226,8 +224,10 @@ class OptimalControlProgram:
             All the parameter objectives to optimize of the program
         parameter_constraints: ParameterConstraintList
             All the parameter constraints of the program
-        external_forces: list[list, ...] | tuple[list, ...]
-            The external forces acting on the center of mass of the segments specified in the bioMod
+        external_forces: tuple[tuple[Any]]
+            The external_forces should be of format tuple[tuple[Any]] where the outer list is the number of "
+            "phases, the inner list is the number of shooting points of each phase and the dict is the Any is "
+            "the specific way to add external_force for the specific implementation of the biomodel
         ode_solver: OdeSolverBase
             The solver for the ordinary differential equations
         control_type: ControlType
@@ -247,17 +247,13 @@ class OptimalControlProgram:
             The number of thread to use while solving (multi-threading if > 1)
         use_sx: bool
             The nature of the casadi variables. MX are used if False.
-        skip_continuity: bool
-            This is mainly for internal purposes when creating an OCP not destined to be solved
-        assume_phase_dynamics: bool
-            If the dynamics of for each shooting node in phases are assumed to be the same
         """
 
-        self.check_bioptim_version()
+        self._check_bioptim_version()
 
-        bio_model = self.initialize_model(bio_model)
+        bio_model = self._initialize_model(bio_model)
 
-        self.set_original_values(
+        self._set_original_values(
             bio_model,
             dynamics,
             n_shooting,
@@ -286,10 +282,8 @@ class OptimalControlProgram:
             parameter_init,
             parameter_constraints,
             parameter_objectives,
-            state_continuity_weight,
             n_threads,
             use_sx,
-            assume_phase_dynamics,
             integrated_value_functions,
         )
 
@@ -309,7 +303,7 @@ class OptimalControlProgram:
             u_init,
             parameter_init,
             s_init,
-        ) = self.check_arguments_and_build_nlp(
+        ) = self._check_arguments_and_build_nlp(
             dynamics,
             n_threads,
             n_shooting,
@@ -336,7 +330,6 @@ class OptimalControlProgram:
             parameter_objectives,
             ode_solver,
             use_sx,
-            assume_phase_dynamics,
             bio_model,
             external_forces,
             plot_mappings,
@@ -345,17 +338,15 @@ class OptimalControlProgram:
             variable_mappings,
             integrated_value_functions,
         )
-        self.prepare_node_mapping(node_mappings)
-        self.prepare_dynamics()
-        self.prepare_bounds_and_init(
+        self._prepare_node_mapping(node_mappings)
+        self._prepare_dynamics()
+        self._prepare_bounds_and_init(
             x_bounds, u_bounds, parameter_bounds, s_bounds, x_init, u_init, parameter_init, s_init
         )
 
         self._declare_multi_node_penalties(multinode_constraints, multinode_objectives)
 
-        self.finalize_penalties(
-            skip_continuity,
-            state_continuity_weight,
+        self._finalize_penalties(
             constraints,
             parameter_constraints,
             objective_functions,
@@ -363,18 +354,18 @@ class OptimalControlProgram:
             phase_transitions,
         )
 
-    def check_bioptim_version(self):
+    def _check_bioptim_version(self):
         self.version = {"casadi": casadi.__version__, "biorbd": biorbd.__version__, "bioptim": __version__}
         return
 
-    def initialize_model(self, bio_model):
+    def _initialize_model(self, bio_model):
         if not isinstance(bio_model, (list, tuple)):
             bio_model = [bio_model]
         bio_model = self._check_quaternions_hasattr(bio_model)
         self.n_phases = len(bio_model)
         return bio_model
 
-    def set_original_values(
+    def _set_original_values(
         self,
         bio_model,
         dynamics,
@@ -404,10 +395,8 @@ class OptimalControlProgram:
         parameter_init,
         parameter_constraints,
         parameter_objectives,
-        state_continuity_weight,
         n_threads,
         use_sx,
-        assume_phase_dynamics,
         integrated_value_functions,
     ):
         # Placed here because of MHE
@@ -450,15 +439,13 @@ class OptimalControlProgram:
             "parameter_init": parameter_init,
             "parameter_objectives": parameter_objectives,
             "parameter_constraints": parameter_constraints,
-            "state_continuity_weight": state_continuity_weight,
             "n_threads": n_threads,
             "use_sx": use_sx,
-            "assume_phase_dynamics": assume_phase_dynamics,
             "integrated_value_functions": integrated_value_functions,
         }
         return
 
-    def check_arguments_and_build_nlp(
+    def _check_arguments_and_build_nlp(
         self,
         dynamics,
         n_threads,
@@ -486,7 +473,6 @@ class OptimalControlProgram:
         parameter_objectives,
         ode_solver,
         use_sx,
-        assume_phase_dynamics,
         bio_model,
         external_forces,
         plot_mappings,
@@ -632,14 +618,15 @@ class OptimalControlProgram:
         if not isinstance(use_sx, bool):
             raise RuntimeError("use_sx should be a bool")
 
-        if not assume_phase_dynamics and n_threads > 1:
-            raise RuntimeError("n_threads is greater than 1 is not compatible with assume_phase_dynamics=False")
+        if isinstance(dynamics, Dynamics):
+            tp = dynamics
+            dynamics = DynamicsList()
+            dynamics.add(tp)
+        if not isinstance(dynamics, DynamicsList):
+            raise ValueError("dynamics must be of type DynamicsList or Dynamics")
 
         # Type of CasADi graph
         self.cx = SX if use_sx else MX
-
-        # If the dynamics should be declared individually for each node of the phase or not
-        self.assume_phase_dynamics = assume_phase_dynamics
 
         # Declare optimization variables
         self.program_changed = True
@@ -650,7 +637,7 @@ class OptimalControlProgram:
         self.g_implicit = []
 
         # nlp is the core of a phase
-        self.nlp = [NLP(self.assume_phase_dynamics) for _ in range(self.n_phases)]
+        self.nlp = [NLP(dynamics[i].phase_dynamics) for i in range(self.n_phases)]
         NLP.add(self, "model", bio_model, False)
         NLP.add(self, "phase_idx", [i for i in range(self.n_phases)], False)
 
@@ -667,6 +654,19 @@ class OptimalControlProgram:
 
         # External forces
         if external_forces is not None:
+            if len(external_forces) != self.n_phases:
+                raise RuntimeError(
+                    "The external_forces should be of format list[list[Any]] where the outer list is the number of "
+                    "phases, the inner list is the number of shooting points of each phase and the dict is the Any "
+                    "is the specific way to add external_force for the specific implementation of the biomodel"
+                )
+            for f, nlp in zip(external_forces, self.nlp):
+                if f is not None and len(f) != nlp.ns:
+                    raise RuntimeError(
+                        "The external_forces should be of format list[list[Any]] where the outer list is the number of "
+                        "phases, the inner list is the number of shooting points of each phase and the dict is the Any "
+                        "is the specific way to add external_force for the specific implementation of the biomodel"
+                    )
             NLP.add(self, "external_forces", external_forces, False)
 
         plot_mappings = plot_mappings if plot_mappings is not None else {}
@@ -680,9 +680,6 @@ class OptimalControlProgram:
         phase_mapping, dof_names = self._set_kinematic_phase_mapping()
         NLP.add(self, "phase_mapping", phase_mapping, True)
         NLP.add(self, "dof_names", dof_names, True)
-
-        # Prepare the parameters to optimize
-        self.phase_transitions = []
 
         # Prepare the parameter mappings
         if time_phase_mapping is None:
@@ -736,7 +733,7 @@ class OptimalControlProgram:
             s_init,
         )
 
-    def prepare_node_mapping(self, node_mappings):
+    def _prepare_node_mapping(self, node_mappings):
         # Prepare the node mappings
         if node_mappings is None:
             node_mappings = NodeMappingList()
@@ -750,7 +747,7 @@ class OptimalControlProgram:
             use_states_from_phase_idx, use_controls_from_phase_idx
         )
 
-    def prepare_dynamics(self):
+    def _prepare_dynamics(self):
         # Prepare the dynamics
         for i in range(self.n_phases):
             self.nlp[i].initialize(self.cx)
@@ -762,7 +759,7 @@ class OptimalControlProgram:
                     "please notify the developers by opening open an issue on GitHub pinging Ipuch and EveCharbie"
                 )
 
-    def prepare_bounds_and_init(
+    def _prepare_bounds_and_init(
         self, x_bounds, u_bounds, parameter_bounds, s_bounds, x_init, u_init, parameter_init, s_init
     ):
         self.parameter_bounds = BoundsList()
@@ -777,10 +774,8 @@ class OptimalControlProgram:
         multinode_constraints.add_or_replace_to_penalty_pool(self)
         multinode_objectives.add_or_replace_to_penalty_pool(self)
 
-    def finalize_penalties(
+    def _finalize_penalties(
         self,
-        skip_continuity,
-        state_continuity_weight,
         constraints,
         parameter_constraints,
         objective_functions,
@@ -790,11 +785,10 @@ class OptimalControlProgram:
         # Define continuity constraints
         # Prepare phase transitions (Reminder, it is important that parameters are declared before,
         # otherwise they will erase the phase_transitions)
-        self.phase_transitions = phase_transitions.prepare_phase_transitions(self, state_continuity_weight)
+        self.phase_transitions = phase_transitions.prepare_phase_transitions(self)
 
         # Skipping creates an OCP without built-in continuity constraints, make sure you declared constraints elsewhere
-        if not skip_continuity:
-            self._declare_continuity(state_continuity_weight)
+        self._declare_continuity()
 
         # Prepare constraints
         self.update_constraints(self.implicit_constraints)
@@ -941,38 +935,49 @@ class OptimalControlProgram:
                     option_dict.add(key, scaling_phase_0[key], phase=i)
         return option_dict
 
-    def _declare_continuity(self, state_continuity_weight: float = None) -> None:
+    def _declare_continuity(self) -> None:
         """
         Declare the continuity function for the state variables. By default, the continuity function
-        is a constraint, but it declared as an objective if  state_continuity_weight is not None
-
-        Parameters
-        ----------
-        state_continuity_weight:
-            The weight on continuity objective. If it is not None, then the continuity are objective
-            instead of constraints
+        is a constraint, but it declared as an objective if dynamics_type.state_continuity_weight is not None
         """
 
         for nlp in self.nlp:  # Inner-phase
-            if state_continuity_weight is None:
+            if nlp.dynamics_type.skip_continuity:
+                continue
+
+            if nlp.dynamics_type.state_continuity_weight is None:
                 # Continuity as constraints
-                if self.assume_phase_dynamics:
+                if nlp.phase_dynamics == PhaseDynamics.SHARED_DURING_THE_PHASE:
                     penalty = Constraint(
-                        ConstraintFcn.CONTINUITY, node=Node.ALL_SHOOTING, penalty_type=PenaltyType.INTERNAL
+                        ConstraintFcn.STATE_CONTINUITY, node=Node.ALL_SHOOTING, penalty_type=PenaltyType.INTERNAL
                     )
                     penalty.add_or_replace_to_penalty_pool(self, nlp)
+                    if nlp.ode_solver.is_direct_collocation and nlp.ode_solver.include_starting_collocation_point:
+                        penalty = Constraint(
+                            ConstraintFcn.FIRST_COLLOCATION_HELPER_EQUALS_STATE,
+                            node=Node.ALL_SHOOTING,
+                            penalty_type=PenaltyType.INTERNAL,
+                        )
+                        penalty.add_or_replace_to_penalty_pool(self, nlp)
                 else:
                     for shooting_node in range(nlp.ns):
                         penalty = Constraint(
-                            ConstraintFcn.CONTINUITY, node=shooting_node, penalty_type=PenaltyType.INTERNAL
+                            ConstraintFcn.STATE_CONTINUITY, node=shooting_node, penalty_type=PenaltyType.INTERNAL
                         )
                         penalty.add_or_replace_to_penalty_pool(self, nlp)
+                        if nlp.ode_solver.is_direct_collocation and nlp.ode_solver.include_starting_collocation_point:
+                            penalty = Constraint(
+                                ConstraintFcn.FIRST_COLLOCATION_HELPER_EQUALS_STATE,
+                                node=shooting_node,
+                                penalty_type=PenaltyType.INTERNAL,
+                            )
+                            penalty.add_or_replace_to_penalty_pool(self, nlp)
             else:
                 # Continuity as objectives
-                if self.assume_phase_dynamics:
+                if nlp.phase_dynamics == PhaseDynamics.SHARED_DURING_THE_PHASE:
                     penalty = Objective(
-                        ObjectiveFcn.Mayer.CONTINUITY,
-                        weight=state_continuity_weight,
+                        ObjectiveFcn.Mayer.STATE_CONTINUITY,
+                        weight=nlp.dynamics_type.state_continuity_weight,
                         quadratic=True,
                         node=Node.ALL_SHOOTING,
                         penalty_type=PenaltyType.INTERNAL,
@@ -981,8 +986,8 @@ class OptimalControlProgram:
                 else:
                     for shooting_point in range(nlp.ns):
                         penalty = Objective(
-                            ObjectiveFcn.Mayer.CONTINUITY,
-                            weight=state_continuity_weight,
+                            ObjectiveFcn.Mayer.STATE_CONTINUITY,
+                            weight=nlp.dynamics_type.state_continuity_weight,
                             quadratic=True,
                             node=shooting_point,
                             penalty_type=PenaltyType.INTERNAL,
@@ -1356,85 +1361,28 @@ class OptimalControlProgram:
             -------
             Values computed for the given time, state, control, parameters, penalty and time step
             """
-            if len(x.shape) < 2:
-                x = x.reshape((-1, 1))
+            x, u, s = map(_reshape_to_column, [x, u, s])
 
-            if len(u.shape) < 2:
-                u = u.reshape((-1, 1))
+            penalty_phase = penalty.nodes_phase[0] if penalty.multinode_penalty else penalty.phase
+            # TODO: Fix the scaling of multi_node_penalty (This is a hack, it should be computed at each phase)
 
-            if len(s.shape) < 2:
-                s = s.reshape((-1, 1))
+            dt = _get_time_step(dt, p, x, penalty, penalty_phase)
 
-            if penalty.multinode_penalty:
-                # TODO: Fix the scaling of multi_node_penalty (This is a hack, it should be computed at each phase)
-                penalty_phase = penalty.nodes_phase[0]
-            else:
-                penalty_phase = penalty.phase
+            _target = _get_target_values(t, penalty)
 
-            # if time is parameter of the ocp, we need to evaluate with current parameters
-            if isinstance(dt, Function):
-                dt = dt(p)
-            # The division is to account for the steps in the integration. The else is for Mayer term
-            dt = dt / (x.shape[1] - 1) if x.shape[1] > 1 else dt
-            if not isinstance(penalty.dt, (float, int)):
-                if dt.shape[0] > 1:
-                    dt = dt[penalty_phase]
-
-            _target = (
-                np.hstack([p[..., penalty.node_idx.index(t)] for p in penalty.target])
-                if penalty.target is not None and isinstance(t, int)
-                else []
-            )
-
-            x_scaling = np.concatenate(
-                [
-                    np.repeat(self.nlp[penalty_phase].x_scaling[key].scaling[:, np.newaxis], x.shape[1], axis=1)
-                    for key in self.nlp[penalty_phase].states
-                ]
-            )
-            if penalty.multinode_penalty:
-                len_x = sum(self.nlp[penalty_phase].states[key].shape for key in self.nlp[penalty_phase].states)
-                complete_scaling = np.array(x_scaling)
-                number_of_repeat = x.shape[0] // len_x
-                x_scaling = np.repeat(complete_scaling, number_of_repeat, axis=0)
-            x /= x_scaling
-
+            x = _scale_values(x, self.nlp[penalty_phase].states, penalty, self.nlp[penalty_phase].x_scaling)
             if u.size != 0:
-                u_scaling = np.concatenate(
-                    [
-                        np.repeat(self.nlp[penalty_phase].u_scaling[key].scaling[:, np.newaxis], u.shape[1], axis=1)
-                        for key in self.nlp[penalty_phase].controls
-                    ]
-                )
-                if penalty.multinode_penalty:
-                    len_u = sum(self.nlp[penalty_phase].controls[key].shape for key in self.nlp[penalty_phase].controls)
-                    complete_scaling = np.array(u_scaling)
-                    number_of_repeat = u.shape[0] // len_u
-                    u_scaling = np.repeat(complete_scaling, number_of_repeat, axis=0)
-                u /= u_scaling
-
+                u = _scale_values(u, self.nlp[penalty_phase].controls, penalty, self.nlp[penalty_phase].u_scaling)
             if s.size != 0:
-                s_scaling = np.concatenate(
-                    [
-                        np.repeat(self.nlp[penalty_phase].s_scaling[key].scaling[:, np.newaxis], s.shape[1], axis=1)
-                        for key in self.nlp[penalty_phase].stochastic_variables
-                    ]
+                s = _scale_values(
+                    s, self.nlp[penalty_phase].stochastic_variables, penalty, self.nlp[penalty_phase].s_scaling
                 )
-                if penalty.multinode_penalty:
-                    len_s = sum(
-                        self.nlp[penalty_phase].stochastic_variables[key].shape
-                        for key in self.nlp[penalty_phase].stochastic_variables
-                    )
-                    complete_scaling = np.array(s_scaling)
-                    number_of_repeat = s.shape[0] // len_s
-                    s_scaling = np.repeat(complete_scaling, number_of_repeat, axis=0)
-                s /= s_scaling
 
             out = []
             if penalty.transition or penalty.multinode_penalty:
                 out.append(
                     penalty.weighted_function_non_threaded[t](
-                        x.reshape((-1, 1)), u.reshape((-1, 1)), p, s.reshape((-1, 1)), 0, 0, penalty.weight, _target, 1
+                        t, x.reshape((-1, 1)), u.reshape((-1, 1)), p, s.reshape((-1, 1)), penalty.weight, _target, 1
                     )
                 )  # dt=1 because multinode penalties behave like Mayer functions
 
@@ -1444,26 +1392,26 @@ class OptimalControlProgram:
                 if not np.all(
                     x == 0
                 ):  # This is a hack to initialize the plots because it x is (N,2) and we need (N, M) in collocation
-                    state_value = x[:, :] if penalty.name == "CONTINUITY" else x[:, [0, -1]]
+                    state_value = x[:, :] if penalty.name == "STATE_CONTINUITY" else x[:, [0, -1]]
                     state_value = state_value.reshape((-1, 1))
                     control_value = control_value.reshape((-1, 1))
                     stochastic_value = stochastic_value.reshape((-1, 1))
                 else:
                     state_value = np.zeros(
-                        (x.shape[0] * int(penalty.weighted_function_non_threaded[t].nnz_in(0) / x.shape[0]))
+                        (x.shape[0] * int(penalty.weighted_function_non_threaded[t].nnz_in(1) / x.shape[0]))
                     )
                     if u.size != 0:
                         control_value = np.zeros(
-                            (u.shape[0] * int(penalty.weighted_function_non_threaded[t].nnz_in(1) / u.shape[0]))
+                            (u.shape[0] * int(penalty.weighted_function_non_threaded[t].nnz_in(2) / u.shape[0]))
                         )
                     if s.size != 0:
                         stochastic_value = np.zeros(
-                            (s.shape[0] * int(penalty.weighted_function_non_threaded[t].nnz_in(2) / s.shape[0]))
+                            (s.shape[0] * int(penalty.weighted_function_non_threaded[t].nnz_in(3) / s.shape[0]))
                         )
 
                 out.append(
                     penalty.weighted_function_non_threaded[t](
-                        state_value, control_value, p, stochastic_value, 0, 0, penalty.weight, _target, dt
+                        t, state_value, control_value, p, stochastic_value, penalty.weight, _target, dt
                     )
                 )
             elif (
@@ -1472,12 +1420,12 @@ class OptimalControlProgram:
             ):
                 out = [
                     penalty.weighted_function_non_threaded[t](
-                        x[:, [i, i + 1]], u[:, i], p, s, 0, 0, penalty.weight, _target, dt
+                        t, x[:, [i, i + 1]], u[:, i], p, s, penalty.weight, _target, dt
                     )
                     for i in range(x.shape[1] - 1)
                 ]
             else:
-                out.append(penalty.weighted_function_non_threaded[t](x, u, p, s, 0, 0, penalty.weight, _target, dt))
+                out.append(penalty.weighted_function_non_threaded[t](t, x, u, p, s, penalty.weight, _target, dt))
             return sum1(horzcat(*out))
 
         def add_penalty(_penalties):
@@ -1874,7 +1822,6 @@ class OptimalControlProgram:
                             _phase_time[i] = _phase_time[ocp.time_phase_mapping.to_second.map_idx[i]]
             return _has_penalty
 
-        NLP.add(self, "t_initial_guess", phase_time, False)
         self.original_phase_time = phase_time
         if isinstance(phase_time, (int, float)):
             phase_time = [phase_time]
@@ -1977,3 +1924,45 @@ class OptimalControlProgram:
             return ValueError(f"node_index out of range [0:{self.nlp[phase_idx].ns}]")
         previous_phase_time = sum([nlp.tf for nlp in self.nlp[:phase_idx]])
         return previous_phase_time + self.nlp[phase_idx].node_time(node_idx)
+
+
+# helpers
+def _reshape_to_column(array) -> np.ndarray:
+    """Reshape the input array to column if it's not already."""
+    return array.reshape((-1, 1)) if len(array.shape) < 2 else array
+
+
+def _get_time_step(dt, p, x, penalty, penalty_phase) -> np.ndarray:
+    """Compute the time step based on its type and state shape."""
+    # if time is parameter of the ocp, we need to evaluate with current parameters
+    if isinstance(dt, Function):
+        dt = dt(p)
+    # The division is to account for the steps in the integration. The else is for Mayer term
+    if not isinstance(penalty.dt, (float, int)) and dt.shape[0] > 1:
+        dt = dt[penalty_phase]
+    return dt / (x.shape[1] - 1) if x.shape[1] > 1 else dt
+
+
+def _get_target_values(t, penalty) -> np.ndarray:
+    """Retrieve target values based on time and penalty."""
+    return (
+        np.hstack([p[..., penalty.node_idx.index(t)] for p in penalty.target])
+        if penalty.target and isinstance(t, int)
+        else []
+    )
+
+
+def _scale_values(values, scaling_entities, penalty, scaling_data):
+    """Scale the provided values based on the scaling entities and type."""
+
+    scaling = np.concatenate(
+        [np.repeat(scaling_data[key].scaling[:, np.newaxis], values.shape[1], axis=1) for key in scaling_entities]
+    )
+
+    if penalty.multinode_penalty:
+        len_values = sum(scaling_entities[key].shape for key in scaling_entities)
+        complete_scaling = np.array(scaling)
+        number_of_repeat = values.shape[0] // len_values
+        scaling = np.repeat(complete_scaling, number_of_repeat, axis=0)
+
+    return values / scaling

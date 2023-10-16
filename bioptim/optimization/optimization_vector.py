@@ -62,7 +62,7 @@ class OptimizationVectorHelper:
                             nlp.cx.sym(
                                 "X_scaled_" + str(nlp.phase_idx) + "_" + str(k),
                                 nlp.states.scaled.shape,
-                                nlp.ode_solver.polynomial_degree + 1,
+                                nlp.ode_solver.n_cx - 1,  # do not include the cx_end
                             )
                         )
                     else:
@@ -124,12 +124,9 @@ class OptimizationVectorHelper:
         -------
         The vector of all variables
         """
-
         x_scaled = []
         u_scaled = []
         s_scaled = []
-        motor_noise = []
-        sensory_noise = []
         for nlp in ocp.nlp:
             if nlp.ode_solver.is_direct_collocation:
                 x_scaled += [x.reshape((-1, 1)) for x in nlp.X_scaled]
@@ -137,14 +134,7 @@ class OptimizationVectorHelper:
                 x_scaled += nlp.X_scaled
             u_scaled += nlp.U_scaled
             s_scaled += nlp.S_scaled
-            if nlp.motor_noise is not None:
-                motor_noise += [nlp.motor_noise]
-                sensory_noise += [nlp.sensory_noise]
-
         vector = vertcat(*x_scaled, *u_scaled, ocp.parameters.cx, *s_scaled)
-
-        if len(motor_noise) > 0:
-            vector = vertcat(vector, *motor_noise, *sensory_noise)
         return vector
 
     @staticmethod
@@ -165,7 +155,7 @@ class OptimizationVectorHelper:
 
             repeat = 1
             if current_nlp.ode_solver.is_direct_collocation:
-                repeat += current_nlp.ode_solver.polynomial_degree
+                repeat += current_nlp.ode_solver.n_cx - 2
 
             nlp = ocp.nlp[current_nlp.use_states_from_phase_idx]
             OptimizationVectorHelper._set_node_index(nlp, 0)
@@ -280,16 +270,6 @@ class OptimizationVectorHelper:
                 v_bounds_min = np.concatenate((v_bounds_min, np.reshape(collapsed_values_min.T, (-1, 1))))
                 v_bounds_max = np.concatenate((v_bounds_max, np.reshape(collapsed_values_max.T, (-1, 1))))
 
-        for i_phase in range(ocp.n_phases):
-            nlp = ocp.nlp[i_phase]
-            if nlp.motor_noise is not None:
-                n_motor_noise = nlp.motor_noise.shape[0]
-                n_sensory_noise = nlp.sensory_noise.shape[0]
-                v_bounds_min = np.concatenate((v_bounds_min, np.zeros((n_motor_noise, 1))))
-                v_bounds_min = np.concatenate((v_bounds_min, np.zeros((n_sensory_noise, 1))))
-                v_bounds_max = np.concatenate((v_bounds_max, np.ones((n_motor_noise, 1))))
-                v_bounds_max = np.concatenate((v_bounds_max, np.ones((n_sensory_noise, 1))))
-
         return v_bounds_min, v_bounds_max
 
     @staticmethod
@@ -309,7 +289,7 @@ class OptimizationVectorHelper:
 
             repeat = 1
             if current_nlp.ode_solver.is_direct_collocation:
-                repeat += current_nlp.ode_solver.polynomial_degree
+                repeat += current_nlp.ode_solver.n_cx - 2
 
             nlp = ocp.nlp[current_nlp.use_states_from_phase_idx]
             OptimizationVectorHelper._set_node_index(nlp, 0)
@@ -405,14 +385,6 @@ class OptimizationVectorHelper:
 
                 v_init = np.concatenate((v_init, np.reshape(collapsed_values.T, (-1, 1))))
 
-        for i_phase in range(len(ocp.nlp)):
-            nlp = ocp.nlp[i_phase]
-            if nlp.motor_noise is not None:
-                n_motor_noise = nlp.motor_noise.shape[0]
-                n_sensory_noise = nlp.sensory_noise.shape[0]
-                v_init = np.concatenate((v_init, np.zeros((n_motor_noise, 1))))
-                v_init = np.concatenate((v_init, np.zeros((n_sensory_noise, 1))))
-
         return v_init
 
     @staticmethod
@@ -464,7 +436,6 @@ class OptimizationVectorHelper:
         """
 
         v_array = np.array(data).squeeze()
-
         data_states = []
         data_controls = []
         data_stochastic_variables = []
@@ -472,7 +443,7 @@ class OptimizationVectorHelper:
             nlp = ocp.nlp[p]
             nlp.controls.node_index = 0
 
-            n_points = nlp.ns * (1 if nlp.ode_solver.is_direct_shooting else (nlp.ode_solver.polynomial_degree + 1)) + 1
+            n_points = nlp.ns * (1 if nlp.ode_solver.is_direct_shooting else (nlp.ode_solver.n_cx - 1)) + 1
             data_states.append({key: np.ndarray((nlp.states[key].shape, n_points)) for key in nlp.states})
             data_controls.append(
                 {
@@ -507,7 +478,7 @@ class OptimizationVectorHelper:
             nx = nlp.states.shape
 
             if nlp.use_states_from_phase_idx == nlp.phase_idx:
-                repeat = (nlp.ode_solver.polynomial_degree + 1) if nlp.ode_solver.is_direct_collocation else 1
+                repeat = (nlp.ode_solver.n_cx - 1) if nlp.ode_solver.is_direct_collocation else 1
                 for k in range((nlp.ns * repeat) + 1):
                     nlp.states.node_index = k // repeat
                     x_array = v_array[offset : offset + nx].reshape((nlp.states.scaled.shape, -1), order="F")
@@ -576,7 +547,7 @@ class OptimizationVectorHelper:
 
         if nlp.ode_solver.is_direct_collocation:
             if interpolation_type != InterpolationType.EACH_FRAME:
-                n_points *= nlp.ode_solver.steps + 1
+                n_points *= nlp.ode_solver.n_cx - 1
         return n_points
 
     @staticmethod

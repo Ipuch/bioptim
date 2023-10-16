@@ -20,6 +20,11 @@ class BioModel(Protocol):
         """transform the class into a save and load format"""
 
     @property
+    def friction_coefficients(self) -> MX:
+        """Get the coefficient of friction to apply to specified elements in the dynamics"""
+        return MX()
+
+    @property
     def gravity(self) -> MX:
         """Get the current gravity applied to the model"""
         return MX()
@@ -75,7 +80,7 @@ class BioModel(Protocol):
         """Get all segments"""
         return ()
 
-    def homogeneous_matrices_in_global(self, q, reference_idx, inverse=False) -> tuple:
+    def homogeneous_matrices_in_global(self, q, segment_id, inverse=False) -> tuple:
         """
         Get the homogeneous matrices of all segments in the world frame,
         such as: P_R0 = T_R0_R1 * P_R1
@@ -84,9 +89,9 @@ class BioModel(Protocol):
         P_R1 the position of any point P in the segment R1 frame.
         """
 
-    def homogeneous_matrices_in_child(self, *args) -> tuple:
+    def homogeneous_matrices_in_child(self, segment_id) -> MX:
         """
-        Get the homogeneous matrices of all segments in their parent frame,
+        Get the homogeneous matrices of one segment in its parent frame,
         such as: P_R1 = T_R1_R2 * P_R2
         with P_R1 the position of any point P in the segment R1 frame,
         with P_R2 the position of any point P in the segment R2 frame,
@@ -110,7 +115,7 @@ class BioModel(Protocol):
     def angular_momentum(self, q, qdot) -> MX:
         """Get the angular momentum of the model"""
 
-    def reshape_qdot(self, q, qdot):
+    def reshape_qdot(self, q, qdot) -> MX:
         """
         In case, qdot need to be reshaped, such as if one want to get velocities from quaternions.
         Since we don't know if this is the case, this function is always called
@@ -150,16 +155,18 @@ class BioModel(Protocol):
     def reorder_qddot_root_joints(self, qddot_root, qddot_joints) -> MX:
         """reorder the qddot, from the root dof and the joints dof"""
 
-    def forward_dynamics(self, q, qdot, tau, fext=None, f_contacts=None) -> MX:
+    def forward_dynamics(self, q, qdot, tau, external_forces=None, translational_forces=None) -> MX:
         """compute the forward dynamics"""
 
-    def constrained_forward_dynamics(self, q, qdot, tau, external_forces=None) -> MX:
+    def constrained_forward_dynamics(self, q, qdot, tau, external_forces=None, translational_forces=None) -> MX:
         """compute the forward dynamics with constraints"""
 
-    def inverse_dynamics(self, q, qdot, qddot, f_ext=None, f_contacts=None) -> MX:
+    def inverse_dynamics(self, q, qdot, qddot, f_ext=None, external_forces=None, translational_forces=None) -> MX:
         """compute the inverse dynamics"""
 
-    def contact_forces_from_constrained_forward_dynamics(self, q, qdot, tau, f_ext=None) -> MX:
+    def contact_forces_from_constrained_forward_dynamics(
+        self, q, qdot, tau, external_forces=None, translational_forces=None
+    ) -> MX:
         """compute the contact forces"""
 
     def qdot_from_impact(self, q, qdot_pre_impact) -> MX:
@@ -290,7 +297,7 @@ class BioModel(Protocol):
         """
 
     def partitioned_forward_dynamics(
-        self, q_u, qdot_u, tau, external_forces=None, f_contacts=None, q_v_init=None
+        self, q_u, qdot_u, tau, external_forces=None, translational_forces=None, q_v_init=None
     ) -> MX:
         """
         This is the forward dynamics of the model, but only for the independent joints
@@ -305,8 +312,8 @@ class BioModel(Protocol):
             The generalized torques
         external_forces: MX
             The external forces
-        f_contacts: MX
-            The contact forces
+        translational_forces: MX
+            The translational forces
 
         Returns
         -------

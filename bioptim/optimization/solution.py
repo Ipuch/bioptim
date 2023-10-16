@@ -4,7 +4,7 @@ from copy import deepcopy
 import numpy as np
 from scipy import interpolate as sci_interp
 from scipy.interpolate import interp1d
-from casadi import vertcat, DM, Function, MX, horzcat
+from casadi import vertcat, DM, Function
 from matplotlib import pyplot as plt
 
 from ..limits.objective_functions import ObjectiveFcn
@@ -18,14 +18,13 @@ from ..misc.enums import (
     SolutionIntegrator,
     Node,
     QuadratureRule,
+    PhaseDynamics,
 )
-from ..misc.utils import check_version
 from ..optimization.non_linear_program import NonLinearProgram
 from ..optimization.optimization_variable import OptimizationVariableList, OptimizationVariable
 from ..optimization.optimization_vector import OptimizationVectorHelper
 from ..dynamics.ode_solver import OdeSolver
 from ..interfaces.solve_ivp_interface import solve_ivp_interface, solve_ivp_bioptim_interface
-from ..interfaces.biorbd_model import BiorbdModel
 
 
 class Solution:
@@ -218,6 +217,7 @@ class Solution:
             self.use_states_from_phase_idx = nlp.use_states_from_phase_idx
             self.use_controls_from_phase_idx = nlp.use_controls_from_phase_idx
             self.model = nlp.model
+            self.time_cx = nlp.time_cx
             self.states = nlp.states
             self.states_dot = nlp.states_dot
             self.controls = nlp.controls
@@ -238,7 +238,7 @@ class Solution:
             self.x_scaling = nlp.x_scaling
             self.u_scaling = nlp.u_scaling
             self.s_scaling = nlp.s_scaling
-            self.assume_phase_dynamics = nlp.assume_phase_dynamics
+            self.phase_dynamics = nlp.phase_dynamics
 
     class SimplifiedOCP:
         """
@@ -278,7 +278,6 @@ class Solution:
             self.phase_transitions = ocp.phase_transitions
             self.prepare_plots = ocp.prepare_plots
             self.time_phase_mapping = ocp.time_phase_mapping
-            self.assume_phase_dynamics = ocp.assume_phase_dynamics
             self.n_threads = ocp.n_threads
 
     def __init__(self, ocp, sol: dict | list | tuple | np.ndarray | DM | None):
@@ -384,17 +383,18 @@ class Solution:
                                 )
                             stochastic_variables_num = vertcat(stochastic_variables_num, stochastic_variables_num_tempo)
 
+                    time_tempo = np.array([])
                     parameters_tempo = np.array([])
                     if len(parameters) > 0:
                         for key_tempo in parameters[i_phase].keys():
                             parameters_tempo = np.concatenate((parameters_tempo, parameters[i_phase][key_tempo]))
                     casadi_func = Function(
                         "integrate_values",
-                        [states_cx, controls_cx, nlp.parameters.cx_start, stochastic_variables_cx],
+                        [nlp.time_cx, states_cx, controls_cx, nlp.parameters.cx_start, stochastic_variables_cx],
                         [integrated_values_cx],
                     )
                     integrated_values_this_time = casadi_func(
-                        states_num, controls_num, parameters_tempo, stochastic_variables_num
+                        time_tempo, states_num, controls_num, parameters_tempo, stochastic_variables_num
                     )
                     nb_elements = nlp.integrated_values[key].cx_start.shape[0]
                     integrated_values_data = np.zeros((nb_elements, nlp.ns))
@@ -478,20 +478,20 @@ class Solution:
             if sum([isinstance(s, InitialGuessList) for s in _sol]) != 4:
                 raise ValueError(
                     "solution must be a solution dict, "
-                    "an InitialGuess[List] of len 3 or 4 (states, controls, parameters, stochastic_variables), "
+                    "an InitialGuess[List] of len 4 (states, controls, parameters, stochastic_variables), "
                     "or a None"
                 )
             if sum([len(s) != len(self.ns) if p != 3 else False for p, s in enumerate(_sol)]) != 0:
                 raise ValueError("The InitialGuessList len must match the number of phases")
             if n_param != 0:
-                if len(_sol) != 3 and len(_sol[2]) != 1 and _sol[2][0].shape != (n_param, 1):
+                if len(_sol) != 3 and len(_sol[3]) != 1 and _sol[3][0].shape != (n_param, 1):
                     raise ValueError(
                         "The 3rd element is the InitialGuess of the parameter and "
                         "should be a unique vector of size equal to n_param"
                     )
 
             self.vector = np.ndarray((0, 1))
-            sol_states, sol_controls, sol_stochastic_variables = _sol[0], _sol[1], _sol[3]
+            sol_states, sol_controls, sol_params, sol_stochastic_variables = _sol
 
             # For states
             for p, ss in enumerate(sol_states):
@@ -530,7 +530,6 @@ class Solution:
 
             # For parameters
             if n_param:
-                sol_params = _sol[2]
                 for p, ss in enumerate(sol_params):
                     self.vector = np.concatenate((self.vector, np.repeat(ss.init, self.ns[p] + 1)[:, np.newaxis]))
 
@@ -695,12 +694,12 @@ class Solution:
 
         if skip_data:
             new._states["unscaled"], new._controls["unscaled"], new._stochastic_variables["unscaled"] = [], [], []
-            new._states["scaled"], new._controls["scaled"], new.parameters, new._stochastic_variables["scaled"] = (
-                [],
-                [],
-                {},
-                [],
-            )
+            (
+                new._states["scaled"],
+                new._controls["scaled"],
+                new.parameters,
+                new._stochastic_variables["unscaled"],
+            ) = ([], [], {}, [])
         else:
             new._states["scaled"] = deepcopy(self._states["scaled"])
             new._controls["scaled"] = deepcopy(self._controls["scaled"])
@@ -1137,11 +1136,15 @@ class Solution:
         time_phase = self.phase_time
         for p, nlp in enumerate(self.ocp.nlp):
             is_direct_collocation = nlp.ode_solver.is_direct_collocation
+            include_starting_collocation_point = False
+            if is_direct_collocation:
+                include_starting_collocation_point = nlp.ode_solver.include_starting_collocation_point
 
             step_times = self._define_step_times(
                 dynamics_step_time=nlp.dynamics[0].step_time,
                 ode_solver_steps=nlp.ode_solver.steps,
                 is_direct_collocation=is_direct_collocation,
+                include_starting_collocation_point=include_starting_collocation_point,
                 keep_intermediate_points=keep_intermediate_points,
                 continuous=shooting_type == Shooting.SINGLE,
             )
@@ -1181,6 +1184,7 @@ class Solution:
         keep_intermediate_points: bool = None,
         continuous: bool = True,
         is_direct_collocation: bool = None,
+        include_starting_collocation_point: bool = False,
     ) -> np.ndarray:
         """
         Define the time steps for the integration of the whole phase
@@ -1199,6 +1203,8 @@ class Solution:
             arrival node and the beginning of the next one are expected to be almost equal when the problem converged
         is_direct_collocation: bool
             If the ode solver is direct collocation
+        include_starting_collocation_point
+            If the ode solver is direct collocation and an additional collocation point at the shooting node was used
 
         Returns
         -------
@@ -1211,11 +1217,13 @@ class Solution:
 
         if is_direct_collocation:
             # time is not linear because of the collocation points
-            step_times = (
-                np.array(dynamics_step_time + [1])
-                if keep_intermediate_points
-                else np.array(dynamics_step_time + [1])[[0, -1]]
-            )
+            if keep_intermediate_points:
+                if include_starting_collocation_point:
+                    step_times = np.array([0] + dynamics_step_time + [1])
+                else:
+                    step_times = np.array(dynamics_step_time + [1])
+            else:
+                step_times = np.array(dynamics_step_time + [1])[[0, -1]]
 
         else:
             # time is linear in the case of direct multiple shooting
@@ -1251,13 +1259,18 @@ class Solution:
             if phase == 0:
                 return np.hstack([self._states["unscaled"][0][key][:, 0] for key in self.ocp.nlp[phase].states])
 
+            t0 = []
+
             x0 = np.concatenate(
                 [self._states["unscaled"][phase - 1][key][:, -1] for key in self.ocp.nlp[phase - 1].states]
             )
             u0 = np.concatenate(
                 [self._controls["unscaled"][phase - 1][key][:, -1] for key in self.ocp.nlp[phase - 1].controls]
             )
-            if self.ocp.assume_phase_dynamics or not np.isnan(u0).any():
+            if (
+                self.ocp.nlp[phase - 1].phase_dynamics == PhaseDynamics.SHARED_DURING_THE_PHASE
+                or not np.isnan(u0).any()
+            ):
                 u0 = vertcat(u0, u0)
             params = []
             s0 = []
@@ -1270,7 +1283,7 @@ class Solution:
                 )
             if self.parameters.keys():
                 params = np.vstack([self.parameters[key] for key in self.parameters])
-            val = self.ocp.phase_transitions[phase - 1].function[-1](vertcat(x0, x0), u0, params, s0, 0, 0)
+            val = self.ocp.phase_transitions[phase - 1].function[-1](t0, vertcat(x0, x0), u0, params, s0)
             if val.shape[0] != x0.shape[0]:
                 raise RuntimeError(
                     f"Phase transition must have the same number of states ({val.shape[0]}) "
@@ -1336,11 +1349,11 @@ class Solution:
 
         for p, (nlp, t_eval) in enumerate(zip(self.ocp.nlp, out._time_vector)):
             self.ocp.nlp[p].controls.node_index = 0
-
             states_phase_idx = self.ocp.nlp[p].use_states_from_phase_idx
             controls_phase_idx = self.ocp.nlp[p].use_controls_from_phase_idx
             param_scaling = nlp.parameters.scaling
             x0 = self._get_first_frame_states(out, shooting_type, phase=p)
+
             u = (
                 np.array([])
                 if nlp.control_type == ControlType.NONE
@@ -1361,6 +1374,7 @@ class Solution:
                 integrated_sol = solve_ivp_bioptim_interface(
                     dynamics_func=nlp.dynamics,
                     keep_intermediate_points=keep_intermediate_points,
+                    t=t_eval,
                     x0=x0,
                     u=u,
                     s=s,
@@ -1371,7 +1385,7 @@ class Solution:
                 )
             else:
                 integrated_sol = solve_ivp_interface(
-                    dynamics_func=nlp.dynamics_func,
+                    dynamics_func=nlp.dynamics_func[0],
                     keep_intermediate_points=keep_intermediate_points,
                     t_eval=t_eval[:-1] if shooting_type == Shooting.MULTIPLE else t_eval,
                     x0=x0,
@@ -1473,9 +1487,10 @@ class Solution:
                 )
             else:
                 integrated_sol = solve_ivp_interface(
-                    dynamics_func=nlp.dynamics_func,
+                    dynamics_func=nlp.dynamics_func[0],
                     keep_intermediate_points=keep_intermediate_points,
                     t_eval=t_eval[:-1] if shooting_type == Shooting.MULTIPLE else t_eval,
+                    t=t_eval,
                     x0=x0,
                     u=u,
                     s=s,
@@ -1805,7 +1820,7 @@ class Solution:
         -------
             A list of bioviz structures (one for each phase). So one can call exec() by hand
         """
-
+        # TODO: Pariterre -> PROBLEM EXPLANATION assume phase dynamic false
         data_to_animate = self.integrate(shooting_type=shooting_type) if shooting_type else self.copy()
         if n_frames == 0:
             try:
@@ -1828,12 +1843,15 @@ class Solution:
 
         # assuming that all the models or the same type.
         self._check_models_comes_from_same_super_class()
-        self.ocp.nlp[0].model.animate(
+
+        all_bioviz = self.ocp.nlp[0].model.animate(
             solution=data_to_animate,
             show_now=show_now,
             tracked_markers=tracked_markers,
             **kwargs,
         )
+
+        return all_bioviz
 
     def _check_models_comes_from_same_super_class(self):
         """Check that all the models comes from the same super class"""
@@ -1899,12 +1917,14 @@ class Solution:
         )
 
         for idx in penalty.node_idx:
+            t = []
             x = []
             u = []
             s = []
             target = []
             if nlp is not None:
                 if penalty.transition:
+                    t = np.array(())
                     _x_0 = np.array(())
                     _u_0 = np.array(())
                     _s_0 = np.array(())
@@ -1954,6 +1974,7 @@ class Solution:
                     s = np.hstack((_s_0, _s_1))
 
                 elif penalty.multinode_penalty:
+                    t = np.array(())
                     x = np.array(())
                     u = np.array(())
                     s = np.array(())
@@ -2001,11 +2022,12 @@ class Solution:
                             col_x_idx += [(idx + 1) * steps]
                             if (
                                 not (idx == nlp.ns - 1 and nlp.control_type == ControlType.CONSTANT)
-                                or nlp.assume_phase_dynamics
+                                or nlp.phase_dynamics == PhaseDynamics.SHARED_DURING_THE_PHASE
                             ):
                                 col_u_idx += [idx + 1]
                             col_s_idx += [idx + 1]
 
+                    t = self.time[phase_idx][idx] if isinstance(self.time, list) else self.time[idx]
                     x = np.array(()).reshape(0, 0)
                     u = np.array(()).reshape(0, 0)
                     s = np.array(()).reshape(0, 0)
@@ -2030,7 +2052,7 @@ class Solution:
 
                 # Deal with final node which sometime is nan (meaning it should be removed to fit the dimensions of the
                 # casadi function
-                if not self.ocp.assume_phase_dynamics and (
+                if not nlp.phase_dynamics == PhaseDynamics.SHARED_DURING_THE_PHASE and (
                     (isinstance(u, list) and u != []) or isinstance(u, np.ndarray)
                 ):
                     u = u[:, ~np.isnan(np.sum(u, axis=0))]
@@ -2038,7 +2060,7 @@ class Solution:
                 x_reshaped = x.T.reshape((-1, 1)) if len(x.shape) > 1 and x.shape[1] != 1 else x
                 u_reshaped = u.T.reshape((-1, 1)) if len(u.shape) > 1 and u.shape[1] != 1 else u
                 s_reshaped = s.T.reshape((-1, 1)) if len(s.shape) > 1 and s.shape[1] != 1 else s
-                val.append(penalty.function[idx](x_reshaped, u_reshaped, p, s_reshaped, 0, 0))
+                val.append(penalty.function[idx](t, x_reshaped, u_reshaped, p, s_reshaped))
 
                 if (
                     penalty.integration_rule == QuadratureRule.APPROXIMATE_TRAPEZOIDAL
@@ -2096,7 +2118,7 @@ class Solution:
             u_reshaped = u.T.reshape((-1, 1)) if len(u.shape) > 1 and u.shape[1] != 1 else u
             s_reshaped = s.T.reshape((-1, 1)) if len(s.shape) > 1 and s.shape[1] != 1 else s
             val_weighted.append(
-                penalty.weighted_function[idx](x_reshaped, u_reshaped, p, s_reshaped, 0, 0, penalty.weight, target, dt)
+                penalty.weighted_function[idx](t, x_reshaped, u_reshaped, p, s_reshaped, penalty.weight, target, dt)
             )
 
         val = np.nansum(val)

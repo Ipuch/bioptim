@@ -4,7 +4,7 @@ import numpy as np
 from casadi import MX, SX, vertcat
 
 from ..misc.mapping import BiMapping
-from ..misc.enums import Node
+from ..misc.enums import PhaseDynamics
 
 
 class OptimizationVariable:
@@ -136,94 +136,6 @@ class OptimizationVariable:
             )
         return self.parent_list.cx_end[self.index, :]
 
-    @staticmethod
-    def reshape_to_vector(matrix):
-        """
-        Restore the vector form of the matrix
-        """
-        shape_0 = matrix.shape[0]
-        shape_1 = matrix.shape[1]
-        vector = MX.zeros(shape_0 * shape_1)
-        for s0 in range(shape_0):
-            for s1 in range(shape_1):
-                vector[shape_0 * s1 + s0] = matrix[s0, s1]
-        return vector
-
-    @staticmethod
-    def reshape_to_matrix(variable, shape_0, shape_1, node: Node, key: str):
-        """
-        Restore the matrix form of the variables
-        """
-        if node == Node.START:
-            var = variable[key].cx_start
-        elif node == Node.MID:
-            var = variable[key].cx_mid
-        elif node == Node.END:
-            var = variable[key].cx_end
-        else:
-            raise RuntimeError("Node must be a Node.START for cx_start, Node.MID for cx_mid, or Node.END for cx_end")
-
-        matrix = MX(shape_0, shape_1)
-        for s0 in range(shape_1):
-            for s1 in range(shape_0):
-                matrix[s1, s0] = var[s0 * shape_0 + s1]
-        return matrix
-
-    @staticmethod
-    def reshape_sym_to_matrix(variable, shape_0, shape_1):
-        """
-        Restore the matrix form of the variables
-        """
-        var = variable
-        matrix = MX(shape_0, shape_1)
-        for s0 in range(shape_1):
-            for s1 in range(shape_0):
-                matrix[s1, s0] = var[s0 * shape_0 + s1]
-        return matrix
-
-    @staticmethod
-    def reshape_to_cholesky_matrix(variable, shape_0, node: Node, key: str):
-        """
-        Restore the lower diagonal matrix form of the variables vector
-        """
-        if key is None:
-            raise RuntimeError("The key must be specified")
-        if node is None:
-            raise RuntimeError(
-                "The node must be specified, you have the choice between Node.START, Node.MID, and" "Node.END"
-            )
-        if node == Node.START:
-            var = variable[key].cx_start
-        elif node == Node.MID:
-            var = variable[key].cx_mid
-        elif node == Node.END:
-            var = variable[key].cx_end
-        else:
-            raise RuntimeError("Node must be a Node.START for cx_start, Node.MID for cx_mid, or Node.END for cx_end")
-
-        matrix = MX.zeros(shape_0, shape_0)
-        i = 0
-        for s0 in range(shape_0):
-            for s1 in range(s0 + 1):
-                matrix[s1, s0] = var[i]
-                i += 1
-        return matrix
-
-    @staticmethod
-    def reshape_sym_to_cholesky_matrix(variable, shape_0):
-        """
-        Restore the lower diagonal matrix form of the variables vector
-        """
-        var = variable
-
-        matrix = MX.zeros(shape_0, shape_0)
-        i = 0
-        for s0 in range(shape_0):
-            for s1 in range(s0 + 1):
-                matrix[s1, s0] = var[i]
-                i += 1
-        return matrix
-
 
 class OptimizationVariableList:
     """
@@ -262,7 +174,7 @@ class OptimizationVariableList:
         The number of variables in the list
     """
 
-    def __init__(self, cx_constructor, assume_phase_dynamics):
+    def __init__(self, cx_constructor, phase_dynamics):
         self.elements: list = []
         self.fake_elements: list = []
         self._cx_start: MX | SX | np.ndarray = np.array([])
@@ -272,7 +184,7 @@ class OptimizationVariableList:
         self.mx_reduced: MX = MX.sym("var", 0, 0)
         self.cx_constructor = cx_constructor
         self._current_cx_to_get = 0
-        self.assume_phase_dynamics = assume_phase_dynamics
+        self.phase_dynamics = phase_dynamics
 
     def __getitem__(self, item: int | str | list | range):
         """
@@ -326,7 +238,7 @@ class OptimizationVariableList:
     def current_cx_to_get(self, index: int):
         """
         Set the value of current_cx_to_get to corresponding index (cx_start for 0, cx_mid for 1, cx_end for 2) if
-        ocp.assume_phase_dynamics. Otherwise, it is always cx_start
+        phase_dynamics == PhaseDynamics.SHARED_DURING_PHASE. Otherwise, it is always cx_start
 
         Parameters
         ----------
@@ -334,7 +246,7 @@ class OptimizationVariableList:
             The index to set the current cx to
         """
 
-        if not self.assume_phase_dynamics:
+        if self.phase_dynamics == PhaseDynamics.ONE_PER_NODE:
             self._current_cx_to_get = 0
             return
 
@@ -342,7 +254,7 @@ class OptimizationVariableList:
             raise ValueError(
                 "Valid values for setting the cx is 0, 1 or 2. If you reach this error message, you probably tried to "
                 "add more penalties than available in a multinode constraint. You can try to split the constraints "
-                "into more penalties or use assume_phase_dynamics=False."
+                "into more penalties or use phase_dynamics=PhaseDynamics.ONE_PER_NODE"
             )
 
         else:
@@ -378,8 +290,6 @@ class OptimizationVariableList:
             The list of SX or MX variable associated with this variable
         mx: MX
             The MX variable associated with this variable
-        bimapping: BiMapping
-            The Mapping of the MX against CX
         """
 
         if len(cx) < 3:
@@ -397,7 +307,7 @@ class OptimizationVariableList:
                 self._cx_intermediates[i] = vertcat(self._cx_intermediates[i], c)
 
         self.mx_reduced = vertcat(self.mx_reduced, MX.sym("var", cx[0].shape[0]))
-        self.elements.append(OptimizationVariable(name, mx, cx, index, bimapping, self))
+        self.elements.append(OptimizationVariable(name, mx, cx, index, bimapping, parent_list=self))
 
     def append_from_scaled(
         self,
@@ -565,13 +475,13 @@ class OptimizationVariableList:
 
 
 class OptimizationVariableContainer:
-    def __init__(self, assume_phase_dynamics: bool):
+    def __init__(self, phase_dynamics: PhaseDynamics):
         """
         This is merely a declaration function, it is mandatory to call initialize_from_shooting to get valid structures
 
         Parameters
         ----------
-        assume_phase_dynamics
+        phase_dynamics: PhaseDynamics
             If the dynamics is the same for all the phase (effectively always setting _node_index to 0 even though the
             user sets it to something else)
         """
@@ -579,7 +489,7 @@ class OptimizationVariableContainer:
         self._unscaled: list[OptimizationVariableList, ...] = []
         self._scaled: list[OptimizationVariableList, ...] = []
         self._node_index = 0  # TODO: [0] to [node_index]
-        self.assume_phase_dynamic = assume_phase_dynamics
+        self.phase_dynamics = phase_dynamics
 
     @property
     def node_index(self):
@@ -587,7 +497,7 @@ class OptimizationVariableContainer:
 
     @node_index.setter
     def node_index(self, value):
-        if not self.assume_phase_dynamic:
+        if self.phase_dynamics == PhaseDynamics.ONE_PER_NODE:
             self._node_index = value
 
     def initialize_from_shooting(self, n_shooting: int, cx: Callable):
@@ -607,8 +517,8 @@ class OptimizationVariableContainer:
 
         for node_index in range(n_shooting):
             self.cx_constructor = cx
-            self._scaled.append(OptimizationVariableList(cx, self.assume_phase_dynamic))
-            self._unscaled.append(OptimizationVariableList(cx, self.assume_phase_dynamic))
+            self._scaled.append(OptimizationVariableList(cx, self.phase_dynamics))
+            self._unscaled.append(OptimizationVariableList(cx, self.phase_dynamics))
 
     def __getitem__(self, item: int | str):
         if isinstance(item, int):
@@ -730,45 +640,3 @@ class OptimizationVariableContainer:
         if self._iter_idx > len(self):
             raise StopIteration
         return self.unscaled[self._iter_idx - 1].name
-
-    def reshape_to_vector(self, matrix):
-        """
-        Restore the vector form of the matrix
-        """
-        shape_0 = matrix.shape[0]
-        shape_1 = matrix.shape[1]
-        vector = MX.zeros(shape_0 * shape_1)
-        for s0 in range(shape_0):
-            for s1 in range(shape_1):
-                vector[shape_0 * s1 + s0] = matrix[s0, s1]
-        return vector
-
-    def reshape_to_matrix(self, variable, shape_0, shape_1, node: Node, key: str):
-        """
-        Restore the matrix form of the variables
-        """
-        if node == Node.START:
-            var = variable[key].cx_start
-        elif node == Node.MID:
-            var = variable[key].cx_mid
-        elif node == Node.END:
-            var = variable[key].cx_end
-        else:
-            raise RuntimeError("Node must be a Node.START for cx_start, Node.MID for cx_mid, or Node.END for cx_end")
-
-        matrix = MX(shape_0, shape_1)
-        for s0 in range(shape_1):
-            for s1 in range(shape_0):
-                matrix[s1, s0] = var[s0 * shape_0 + s1]
-        return matrix
-
-    def reshape_sym_to_matrix(self, variable, shape_0, shape_1):
-        """
-        Restore the matrix form of the variables
-        """
-        var = variable
-        matrix = MX(shape_0, shape_1)
-        for s0 in range(shape_1):
-            for s1 in range(shape_0):
-                matrix[s1, s0] = var[s0 * shape_0 + s1]
-        return matrix
