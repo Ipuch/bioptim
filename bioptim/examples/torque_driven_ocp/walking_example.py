@@ -1,0 +1,493 @@
+import biorbd as biorbd_eigen
+import numpy as np
+from scipy import interpolate, optimize
+from typing import Union
+
+from bioptim import (
+    OdeSolver,
+    Node,
+    OptimalControlProgram,
+    ConstraintFcn,
+    DynamicsFcn,
+    ObjectiveFcn,
+    ConstraintList,
+    ObjectiveList,
+    DynamicsList,
+    BoundsList,
+    InitialGuessList,
+    ControlType,
+    InterpolationType,
+    PhaseTransitionList,
+    RigidBodyDynamics,
+    MultinodeConstraintList,
+    BiorbdModel,
+)
+from bioptim import Solver, SolutionIntegrator, Shooting
+
+
+class HumanoidOcpMultiPhase:
+    """
+    This class is used to create an optimal control program for a 2d humanoid stick model
+
+    Attributes
+    ----------
+    biorbd_model_path: Union[str, tuple[str]]
+        The biorbd models of the stickman
+    n_shooting:  Union[int, list[int]]
+        The number of shooting points
+    phase_time:  Union[float, list[float]]
+        The time of each phase
+    n_threads: int
+        The number of threads to use
+    control_type: ControlType
+        The type of control to use
+    ode_solver: OdeSolver
+        The ode solver to use
+    rigidbody_dynamics: RigidBodyDynamics
+        The type of rigidbody dynamics to use
+
+
+    """
+
+    def __init__(
+        self,
+        biorbd_model_path: Union[str, tuple[str]] = None,
+        n_shooting: Union[int, list[int]] = 10,
+        phase_time: Union[float, list[float]] = 0.3,
+        n_threads: int = 8,
+        control_type: ControlType = ControlType.CONSTANT,
+        ode_solver: OdeSolver = OdeSolver.COLLOCATION(),
+        rigidbody_dynamics: RigidBodyDynamics = RigidBodyDynamics.ODE,
+        step_length: float = 0.8,
+        right_foot_location: np.array = np.zeros(3),
+        nb_phases: int = 1,
+        seed: int = None,
+        use_sx: bool = False,
+    ):
+        self.biorbd_model_path = biorbd_model_path
+        self.n_shooting = n_shooting
+        self.phase_time = phase_time
+        self.n_threads = n_threads
+        self.control_type = control_type
+        self.ode_solver = ode_solver
+        self.rigidbody_dynamics = rigidbody_dynamics
+
+        if biorbd_model_path is not None:
+            self.biorbd_model = (
+                (BiorbdModel(biorbd_model_path),)
+                if isinstance(biorbd_model_path, str)
+                else (BiorbdModel(biorbd_model_path[0]),)
+            )
+            self.n_shooting = (n_shooting,) if isinstance(n_shooting, int) else (n_shooting[0],)
+            self.phase_time = (phase_time,) if isinstance(phase_time, float) else (phase_time[0],)
+
+            self._set_head()
+            self._set_knee()
+            self._set_shoulder()
+
+            self.n_q = self.biorbd_model[0].nb_q
+            self.n_qdot = self.biorbd_model[0].nb_qdot
+            self.n_qddot = self.biorbd_model[0].nb_qddot
+            self.n_qdddot = self.n_qddot
+            self.n_tau = self.biorbd_model[0].nb_tau
+
+            self.tau_min, self.tau_init, self.tau_max = -500, 0, 500
+            self.qddot_min, self.qddot_init, self.qddot_max = -1000, 0, 1000
+            self.qdddot_min, self.qdddot_init, self.qdddot_max = -10000, 0, 10000
+            self.fext_min, self.fext_init, self.fext_max = -10000, 0, 10000
+
+            self.right_foot_location = right_foot_location
+            self.step_length = step_length
+            self.initial_left_foot_location = right_foot_location - np.array([0, step_length / 2, 0])
+            self.final_left_foot_location = right_foot_location + np.array([0, step_length / 2, 0])
+            self.nb_phases = nb_phases
+
+            self.dynamics = DynamicsList()
+            self.constraints = ConstraintList()
+            self.objective_functions = ObjectiveList()
+            self.multinode_constraints = MultinodeConstraintList()
+            self.phase_transitions = PhaseTransitionList()
+            self.x_bounds = BoundsList()
+            self.u_bounds = BoundsList()
+            self.initial_states = []
+            self.x_init = InitialGuessList()
+            self.u_init = InitialGuessList()
+
+            self.control_type = control_type
+            self.control_nodes = Node.ALL if self.control_type == ControlType.LINEAR_CONTINUOUS else Node.ALL_SHOOTING
+
+            self._set_dynamics()
+            self._set_constraints()
+            self._set_objective_functions()
+
+            self._set_boundary_conditions()
+            self._set_initial_guesses()
+
+            if seed is not None:
+                self.xn_init = InitialGuessList()
+                self.un_init = InitialGuessList()
+
+                q_noise_magnitude = np.repeat(0.05, self.n_q)
+                qdot_noise_magnitude = np.repeat(0.005, self.n_qdot)
+                x_noise_magnitude = np.concatenate((q_noise_magnitude, qdot_noise_magnitude))
+
+                self.xn_init.add(
+                    NoisedInitialGuess(
+                        initial_guess=self.x_init[0],
+                        bounds=self.x_bounds[0],
+                        noise_magnitude=x_noise_magnitude,
+                        n_shooting=self.n_shooting[0] + 1,
+                        bound_push=0.1,
+                        seed=seed,
+                    )
+                )
+
+                u_noise_magnitude = np.repeat(0.005, self.n_tau)
+
+                self.un_init.add(
+                    NoisedInitialGuess(
+                        initial_guess=self.u_init[0],
+                        bounds=self.u_bounds[0],
+                        noise_magnitude=u_noise_magnitude,
+                        n_shooting=self.n_shooting[0],
+                        bound_push=0.1,
+                        seed=seed,
+                    )
+                )
+
+            self.ocp = OptimalControlProgram(
+                self.biorbd_model,
+                self.dynamics,
+                self.n_shooting,
+                self.phase_time,
+                x_init=self.x_init if seed is None else self.xn_init,
+                x_bounds=self.x_bounds,
+                u_init=self.u_init if seed is None else self.un_init,
+                u_bounds=self.u_bounds,
+                objective_functions=self.objective_functions,
+                constraints=self.constraints,
+                phase_transitions=self.phase_transitions,
+                multinode_constraints=self.multinode_constraints,
+                n_threads=n_threads,
+                control_type=self.control_type,
+                ode_solver=ode_solver,
+                use_sx=use_sx,
+            )
+
+    def _set_head(self):
+        self.has_head = False
+        for i in range(self.biorbd_model[0].nb_segments):
+            seg = self.biorbd_model[0].model.segment(i)
+            if seg.name().to_string() == "Head":
+                self.has_head = True
+                break
+
+    def _set_knee(self):
+        self.has_knee = False
+        for i in range(self.biorbd_model[0].nb_segments):
+            seg = self.biorbd_model[0].model.segment(i)
+            if seg.name().to_string() == "RShank":
+                self.has_knee = True
+                break
+
+    def _set_shoulder(self):
+        self.has_shoulder = False
+        for i in range(self.biorbd_model[0].nb_segments):
+            seg = self.biorbd_model[0].model.segment(i)
+            if seg.name().to_string() == "RArm":
+                self.has_shoulder = True
+                break
+
+    def _set_dynamics(self):
+        """
+        Set the dynamics of the optimal control problem
+
+        """
+        self.dynamics.add(
+            DynamicsFcn.TORQUE_DRIVEN, rigidbody_dynamics=self.rigidbody_dynamics, with_contact=True, phase=0
+        )
+
+    def _set_objective_functions(self):
+        # --- Objective function --- #
+        self.objective_functions.add(ObjectiveFcn.Lagrange.MINIMIZE_CONTROL, key="tau", phase=0)
+
+        idx_stability = [0, 1, 2, 3] if self.has_head else [0, 1, 2]
+
+        # torso stability
+        for i in range(self.nb_phases):
+            self.objective_functions.add(
+                ObjectiveFcn.Lagrange.MINIMIZE_QDDOT, index=idx_stability, weight=0.01, phase=i
+            )
+
+            # head stability
+            if self.has_head:
+                self.objective_functions.add(
+                    ObjectiveFcn.Lagrange.MINIMIZE_QDDOT, derivative=True, index=3, weight=0.01, phase=i
+                )
+                self.objective_functions.add(
+                    ObjectiveFcn.Lagrange.MINIMIZE_STATE, key="qdot", index=3, weight=0.01, phase=i
+                )
+
+            # keep velocity com around 1.5 m/s
+            com_velocity = 1.3  # old 1.5
+            self.objective_functions.add(
+                ObjectiveFcn.Mayer.MINIMIZE_COM_VELOCITY,
+                index=1,
+                target=com_velocity,
+                node=Node.START,
+                weight=1000,
+                phase=i,
+            )
+            self.objective_functions.add(
+                ObjectiveFcn.Mayer.MINIMIZE_COM_VELOCITY,
+                index=1,
+                target=com_velocity,
+                node=Node.END,
+                weight=1000,
+                phase=i,
+            )
+
+    def _set_constraints(self):
+        # --- Constraints --- #
+        # Contact force in Z are positive
+        self.constraints.add(
+            ConstraintFcn.TRACK_CONTACT_FORCES, min_bound=0, max_bound=np.inf, node=Node.ALL, contact_index=1, phase=0
+        )  # FP0 > 0 en Z
+
+        # contact node at zero position and zero speed
+        # node = Node.ALL if self.implicit_dynamics else Node.START
+        node = Node.START
+        self.constraints.add(
+            ConstraintFcn.TRACK_MARKERS, node=node, target=self.right_foot_location, marker_index="RFoot", phase=0
+        )
+        self.constraints.add(ConstraintFcn.TRACK_MARKERS_VELOCITY, node=node, marker_index="RFoot", phase=0)
+
+        # first and last step constraints
+        self.constraints.add(
+            ConstraintFcn.TRACK_MARKERS,
+            target=self.initial_left_foot_location,
+            node=Node.START,
+            marker_index="LFoot",
+            phase=0,
+        )
+        self.constraints.add(
+            ConstraintFcn.TRACK_MARKERS,
+            target=self.final_left_foot_location,
+            node=Node.END,
+            marker_index="LFoot",
+            phase=0,
+        )
+
+        # Ensure lift of foot - Toe Clearance
+        if self.has_knee:
+            toe_clearance = 0.05
+            self.constraints.add(
+                ConstraintFcn.TRACK_MARKERS,
+                index=2,
+                min_bound=toe_clearance - 0.01,
+                max_bound=toe_clearance + 0.01,
+                target=toe_clearance,
+                node=Node.MID,
+                marker_index="LFoot",
+                phase=0,
+            )
+
+    def _set_boundary_conditions(self):
+        self.x_bounds = BoundsList()
+        self.x_bounds.add("q", bounds=self.biorbd_model[0].bounds_from_ranges("q"))
+
+        nq = self.n_q
+
+        for i in range(self.nb_phases):
+            q_sign = 1 if i == 0 else -1
+            self.x_bounds[i].max[2, :] = 0  # torso bended forward
+
+            if self.has_head:
+                self.x_bounds[i][nq + 3, 0] = 0  # head velocity zero at the beginning
+                self.x_bounds[i][nq + 3, -1] = 0  # head velocity zero at the end
+
+            if self.has_knee:
+                self.x_bounds[i].min[nq - 2 : nq, [0, -1]] = -np.pi / 8  # driving knees
+
+            # Supervised shoulders
+            if self.has_shoulder:
+                j = 1 if self.has_head else 0
+                self.x_bounds[i][5 + j, 0] = -np.pi / 6 * q_sign
+                self.x_bounds[i][6 + j, 0] = np.pi / 6 * q_sign
+                self.x_bounds[i][5 + j, -1] = np.pi / 6 * q_sign
+                self.x_bounds[i][6 + j, -1] = -np.pi / 6 * q_sign
+
+                self.x_bounds[i][5 + j + nq, 0] = 0
+                self.x_bounds[i][5 + j + nq, -1] = 0
+                self.x_bounds[i][6 + j + nq, 0] = 0
+                self.x_bounds[i][6 + j + nq, -1] = 0
+
+            self.u_bounds.add([self.tau_min] * self.n_tau, [self.tau_max] * self.n_tau)
+            # root is not actuated
+            self.u_bounds[i][:3, :] = 0
+
+    def _set_initial_guesses(self):
+        """
+        Set initial guess for the optimization problem.
+        """
+        # --- Initial guess --- #
+        q0 = [0] * self.n_q
+        # Torso over the floor and bent
+        q0[1] = 0.8
+        q0[2] = -np.pi / 6
+
+        for i in range(self.nb_phases):
+            if i == 0:
+                self.q0i = set_initial_pose(
+                    self.biorbd_model_path[0], np.array(q0), self.right_foot_location, self.initial_left_foot_location
+                )
+                self.q0end = set_initial_pose(
+                    self.biorbd_model_path[0], np.array(q0), self.right_foot_location, self.final_left_foot_location
+                )
+            else:
+                self.q0i = set_initial_pose(
+                    self.biorbd_model_path[1], np.array(q0), self.initial_right_foot_location, self.left_foot_location
+                )
+                self.q0end = set_initial_pose(
+                    self.biorbd_model_path[1], np.array(q0), self.final_right_foot_location, self.left_foot_location
+                )
+
+            # generalized velocities are initialized to 0
+            qdot0 = np.array([0] * self.n_qdot)
+
+            # concatenate q0 and qdot0
+            X0i = np.concatenate((self.q0i, qdot0), axis=0)
+            X0end = np.concatenate((self.q0end, qdot0), axis=0)
+
+            x = np.linspace(0, self.phase_time[i], 2)
+            y = np.array([X0i, X0end]).T
+            f = interpolate.interp1d(x, y)
+            x_new = np.linspace(0, self.phase_time[i], self.n_shooting[i] + 1)
+            X0 = f(x_new)  # use interpolation function returned by `interp1d`
+
+            # self._set_initial_states(X0=X0, n_shooting=self.n_shooting[i])
+            self.x_init.add(X0, interpolation=InterpolationType.EACH_FRAME)
+            self._set_initial_controls(n_shooting=self.n_shooting[i])
+
+    def _set_initial_controls(self, U0: np.array = None, n_shooting: int = None):
+        if U0 is None:
+            self.u_init.add([self.tau_init] * self.n_tau)
+        else:
+            self.u_init.add(U0, interpolation=InterpolationType.EACH_FRAME)
+
+
+def set_initial_pose(model_path: str, q0: np.ndarray, target_RFoot: np.ndarray, target_LFoot: np.ndarray):
+    """
+    Set the initial pose of the model
+
+    Parameters
+    ----------
+    model_path : str
+        Path to the model
+    q0 : np.ndarray
+        Initial position of the model
+    target_RFoot : np.ndarray
+        Target position of the right foot
+    target_LFoot : np.ndarray
+        Target position of the left foot
+
+    Returns
+    -------
+    q0 : np.ndarray
+        Initial position of the model
+    """
+    m = biorbd_eigen.Model(model_path)
+    bound_min = []
+    bound_max = []
+    for i in range(m.nbSegment()):
+        seg = m.segment(i)
+        for r in seg.QRanges():
+            bound_min.append(r.min())
+            bound_max.append(r.max())
+    bounds = (bound_min, bound_max)
+
+    def objective_function(q, *args, **kwargs):
+        """
+        Objective function to minimize
+
+        Parameters
+        ----------
+        q : np.ndarray
+            Position of the model
+
+        Returns
+        -------
+        np.ndarray
+            Distance between the target position of the right and left foot, and the current position of the right and left foot
+        """
+        markers = m.markers(q)
+        out1 = np.linalg.norm(markers[0].to_array() - target_RFoot) ** 2
+        out3 = np.linalg.norm(markers[-1].to_array() - target_LFoot) ** 2
+
+        return out1 + out3
+
+    pos = optimize.least_squares(
+        objective_function,
+        args=(m, target_RFoot, target_LFoot),
+        x0=q0,
+        bounds=bounds,
+        verbose=1,
+        method="trf",
+        jac="3-point",
+        ftol=1e-5,
+        gtol=1e-5,
+    )
+
+    return pos.x
+
+
+def main():
+    n_shooting = 30
+    ode_solver = OdeSolver.COLLOCATION()
+
+    n_threads = 8
+
+    # --- Solve the program --- #
+    humanoid = HumanoidOcpMultiPhase(
+        biorbd_model_path=("models/Humanoid10Dof.bioMod", "models/Humanoid10Dof_left_contact.bioMod"),
+        n_shooting=n_shooting,
+        ode_solver=ode_solver,
+        n_threads=n_threads,
+        nb_phases=1,
+    )
+
+    print("number of states: ", humanoid.ocp.v.n_all_x)
+    print("number of controls: ", humanoid.ocp.v.n_all_u)
+
+    solv = Solver.IPOPT(show_online_optim=False, show_options=dict(show_bounds=True))
+    solv.set_maximum_iterations(1000)
+    solv.set_linear_solver("mumps")
+    solv.set_print_level(5)
+    sol = humanoid.ocp.solve(solv)
+
+    # --- Show results --- #
+    # sol.graphs(show_bounds=True)
+    sol.print_cost()
+
+    out = sol.integrate(
+        shooting_type=Shooting.SINGLE,
+        keep_intermediate_points=False,
+        merge_phases=True,
+        integrator=SolutionIntegrator.SCIPY_DOP853,
+    )
+
+    return sol, out
+
+
+if __name__ == "__main__":
+    main()
+
+    plt.figure()
+    # ocp in blue
+    plt.plot(sol.time, sol.states["q"].T, label="ocp", marker=".", color="blue")
+    # integration in red
+    plt.plot(out.time, out.states["q"].T, label="integrated", marker="+", color="red")
+    plt.legend()
+    plt.show()
+
+    sol.animate(n_frames=0)
