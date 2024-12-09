@@ -602,7 +602,7 @@ class DynamicsFunctions:
         tau = tau + nlp.model.ligament_joint_torque(q, qdot) if with_ligament else tau
 
         dq = DynamicsFunctions.compute_qdot(nlp, q, qdot)
-        dtau = DynamicsFunctions.get(nlp.controls["taudot"], controls)
+        dtau = controls
 
         if (
             rigidbody_dynamics == RigidBodyDynamics.DAE_INVERSE_DYNAMICS
@@ -621,7 +621,7 @@ class DynamicsFunctions:
             dxdt = MX(nlp.states.shape, ddq.shape[1])
             dxdt[nlp.states["q"].index, :] = horzcat(*[dq for _ in range(ddq.shape[1])])
             dxdt[nlp.states["qdot"].index, :] = ddq
-            dxdt[nlp.states["tau"].index, :] = horzcat(*[dtau for _ in range(ddq.shape[1])])
+            dxdt[nlp.states["tau"].index, :] = horzcat(*[dtau for _ in range(dtau.shape[1])])
 
         return DynamicsEvaluation(dxdt=dxdt, defects=None)
 
