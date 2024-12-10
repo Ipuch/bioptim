@@ -1330,19 +1330,21 @@ class InitialGuessList(OptionDict):
             raise ValueError(f"Invalid size of 'n_shooting', 'n_shooting' must be len {nb_phases}")
 
         bounds = self._check_type_and_format_bounds(bounds, nb_phases)
-        magnitude = self._check_type_and_format_magnitude(magnitude, nb_phases, self.keys())
+        # magnitude = self._check_type_and_format_magnitude(magnitude, nb_phases, self.keys())
         bound_push = self._check_type_and_format_bound_push(bound_push, nb_phases)
-        seed = self._check_type_and_format_seed(seed, nb_phases, self.keys())
+        # seed = self._check_type_and_format_seed(seed, nb_phases, self.keys())
 
         for i in range(nb_phases):
             for j, key in enumerate(self[i].keys()):
                 self[i][key].add_noise(
                     bounds=bounds[i][key],
                     n_shooting=n_shooting[i],
-                    magnitude=magnitude[i][key],
+                    # magnitude=magnitude[i][key],
+                    magnitude=magnitude,
                     magnitude_type=magnitude_type,
                     bound_push=bound_push[i],
-                    seed=seed[i][key],
+                    # seed=seed[i][key],
+                    seed=seed,
                 )
 
     @property
