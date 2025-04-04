@@ -1073,14 +1073,17 @@ class PenaltyFunctionAbstract:
             t_span = controller.t_span.cx
             continuity = controller.states.cx_end
             if controller.get_nlp.ode_solver.is_direct_collocation:
-                cx = horzcat(*([controller.states.cx_start] + controller.states.cx_intermediates_list))
+                states_cx = horzcat(*([controller.states.cx_start] + controller.states.cx_intermediates_list))
+                algebraic_states_cx = horzcat(
+                    *([controller.algebraic_states.cx_start] + controller.algebraic_states.cx_intermediates_list)
+                )
 
                 integrated = controller.integrate(
                     t_span=t_span,
-                    x0=cx,
+                    x0=states_cx,
                     u=u,
                     p=controller.parameters.cx,
-                    a=controller.algebraic_states.cx_start,
+                    a=algebraic_states_cx,
                     d=controller.numerical_timeseries.cx,
                 )
                 continuity -= integrated["xf"]
