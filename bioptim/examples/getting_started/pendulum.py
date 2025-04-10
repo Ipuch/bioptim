@@ -24,7 +24,6 @@ from bioptim import (
     BiorbdModel,
     ControlType,
     PhaseDynamics,
-    OnlineOptim,
 )
 
 
@@ -128,7 +127,7 @@ def main():
     """
 
     # --- Prepare the ocp --- #
-    ocp = prepare_ocp(biorbd_model_path="models/pendulum.bioMod", final_time=1, n_shooting=400, n_threads=2)
+    ocp = prepare_ocp(biorbd_model_path="models/pendulum.bioMod", final_time=1, n_shooting=20, n_threads=2)
 
     # --- Live plots --- #
     ocp.add_plot_penalty(CostType.ALL)  # This will display the objectives and constraints at the current iteration
@@ -152,15 +151,15 @@ def main():
     # --- Solve the ocp --- #
     # Default is OnlineOptim.MULTIPROCESS on Linux, OnlineOptim.MULTIPROCESS_SERVER on Windows and None on MacOS
     # To see the graphs on MacOS, one must run the server manually (see resources/plotting_server.py)
-    sol = ocp.solve(Solver.IPOPT(online_optim=OnlineOptim.DEFAULT))
+    sol = ocp.solve(Solver.IPOPT())
 
     # --- Show the results graph --- #
     sol.print_cost()
     # sol.graphs(show_bounds=True, save_name="results.png")
 
     # --- Animate the solution --- #
-    viewer = "bioviz"
-    # viewer = "pyorerun"
+    # viewer = "bioviz"
+    viewer = "pyorerun"
     sol.animate(n_frames=0, viewer=viewer, show_now=True)
 
     # # --- Saving the solver's output after the optimization --- #
