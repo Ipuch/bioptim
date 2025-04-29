@@ -2,7 +2,11 @@ from typing import Callable, Any
 
 import casadi as ca
 import numpy as np
-import pinocchio as pin
+
+# import pinocchio as pin
+import pinocchio.casadi as pin
+from casadi import SX
+from pinocchio import buildModelFromUrdf, LOCAL
 
 from ..protocols.biomodel import BioModel
 from ..utils import cache_function
@@ -35,30 +39,56 @@ class PinocchioModel(BioModel):
         path: str
             The path to the URDF file.
         """
-        try:
-            self.model = pin.buildModelFromUrdf(path)
-        except Exception as e:
-            raise ValueError(f"Could not load model from URDF: {path}") from e
+
+        self.model_eigen = buildModelFromUrdf(path)
+        self.model = pin.Model(self.model_eigen)
 
         self.data = self.model.createData()
         self.path = path
-        self._gravity = ca.MX(self.model.gravity.linear)  # Store gravity vector
+        self._gravity = ca.SX(self.model.gravity.linear)  # Store gravity vector
 
         # Basic check for floating base (Pinocchio convention adds root_joint)
         # This influences q vs nv dimensions
         self._has_floating_base = self.model.joints[1].shortname() == "JointModelFreeFlyer"
 
         # Prepare symbolic variables for CasADi functions
-        self._q_sym = ca.MX.sym("q", self.nb_q, 1)
-        self._qdot_sym = ca.MX.sym("qdot", self.nb_qdot, 1)  # Corresponds to nv
-        self._qddot_sym = ca.MX.sym("qddot", self.nb_qdot, 1)  # Corresponds to nv
-        self._tau_sym = ca.MX.sym("tau", self.nb_tau, 1)  # Corresponds to nv
+        self._q_sym = ca.SX.sym("q", self.nb_q, 1)
+        self._qdot_sym = ca.SX.sym("qdot", self.nb_qdot, 1)  # Corresponds to nv
+        self._qddot_sym = ca.SX.sym("qddot", self.nb_qdot, 1)  # Corresponds to nv
+        self._tau_sym = ca.SX.sym("tau", self.nb_tau, 1)  # Corresponds to nv
 
-        # # Pinocchio CasADi interface (requires pinocchio built with CasADi support)
-        # if not hasattr(pin, "casadi"):
-        #     raise ImportError("Pinocchio was not built with CasADi support. Please rebuild Pinocchio with CasADi.")
+        self.parameters = SX()
+        self._cached_functions = {}
+        self._symbolic_variables()
 
-        self.pinocchio_casadi = pin.casadi
+    def _symbolic_variables(self):
+        """Declaration of SX variables of the right shape for the creation of CasADi Functions"""
+        self.q = SX.sym("q_mx", self.nb_q, 1)
+        self.qdot = SX.sym("qdot_mx", self.nb_qdot, 1)
+        self.qddot = SX.sym("qddot_mx", self.nb_qddot, 1)
+        self.qddot_joints = SX.sym("qddot_joints_mx", self.nb_qddot - self.nb_root, 1)
+        self.tau = SX.sym("tau_mx", self.nb_tau, 1)
+        self.muscle = SX.sym("muscle_mx", self.nb_muscles, 1)
+        self.activations = SX.sym("activations_mx", self.nb_muscles, 1)
+        self.external_forces = SX.sym(
+            "external_forces_mx",
+            self.nb_external_forces,
+            1,
+        )
+
+    @property
+    def nb_muscles(self) -> int:
+        """Get the number of muscles"""
+        # Pinocchio doesn't have a direct muscle count, but we can check the model's options
+        # or use a convention (e.g., muscles are defined in the URDF)
+        return 0
+
+    @property
+    def nb_external_forces(self) -> int:
+        """Get the number of external forces"""
+        # Pinocchio doesn't have a direct external force count, but we can check the model's options
+        # or use a convention (e.g., external forces are defined in the URDF)
+        return 0
 
     @property
     def name(self) -> str:
@@ -221,7 +251,7 @@ class PinocchioModel(BioModel):
             raise ValueError(f"rt_index (frame index) {rt_index} out of bounds.")
 
         # Use Pinocchio's CasADi interface for forward kinematics
-        frame_pose_func = self.pinocchio_casadi.computeFrameJacobian(self.model, self._q_sym, rt_index)
+        frame_pose_func = pin.computeFrameJacobian(self.model, self._q_sym, rt_index)
 
         # This computes Jacobian, not pose. Need Frame Placement.
         # Let's try pin.updateFramePlacement + extract
@@ -234,19 +264,19 @@ class PinocchioModel(BioModel):
         # For now, raise NotImplementedError until Pinocchio's CasADi support for this is confirmed/implemented.
         raise NotImplementedError("Symbolic RT (Frame Pose) function not implemented for Pinocchio yet.")
         # Placeholder logic:
-        # pose_func = self.pinocchio_casadi.some_frame_placement_function(self.model, self._q_sym, rt_index)
+        # pose_func = pin.some_frame_placement_function(self.model, self._q_sym, rt_index)
         # return ca.Function(f"rt_{rt_index}", [self._q_sym], [pose_func], ["q"], ["rt_matrix"])
 
     @cache_function
     def center_of_mass(self) -> ca.Function:
         """Get the center of mass of the model"""
-        com_expr = self.pinocchio_casadi.centerOfMass(self.model, self._q_sym)
+        com_expr = pin.centerOfMass(self.model, self._q_sym)
         return ca.Function("center_of_mass", [self._q_sym], [com_expr], ["q"], ["com"])
 
     @cache_function
     def center_of_mass_velocity(self) -> ca.Function:
         """Get the center of mass velocity of the model"""
-        com_vel_expr = self.pinocchio_casadi.centerOfMassVelocity(self.model, self._q_sym, self._qdot_sym)
+        com_vel_expr = pin.centerOfMassVelocity(self.model, self._q_sym, self._qdot_sym)
         return ca.Function(
             "center_of_mass_velocity", [self._q_sym, self._qdot_sym], [com_vel_expr], ["q", "qdot"], ["com_vel"]
         )
@@ -254,9 +284,7 @@ class PinocchioModel(BioModel):
     @cache_function
     def center_of_mass_acceleration(self) -> ca.Function:
         """Get the center of mass acceleration of the model"""
-        com_acc_expr = self.pinocchio_casadi.centerOfMassAcceleration(
-            self.model, self._q_sym, self._qdot_sym, self._qddot_sym
-        )
+        com_acc_expr = pin.centerOfMassAcceleration(self.model, self._q_sym, self._qdot_sym, self._qddot_sym)
         return ca.Function(
             "center_of_mass_acceleration",
             [self._q_sym, self._qdot_sym, self._qddot_sym],
@@ -270,10 +298,10 @@ class PinocchioModel(BioModel):
         """Get the angular momentum of the model"""
         # Need to compute centroidal momentum matrix first
         # H = Ag(q) * v
-        Ag_expr = self.pinocchio_casadi.computeCentroidalMomentumTimeVariation(self.model, self._q_sym, self._qdot_sym)
+        Ag_expr = pin.computeCentroidalMomentumTimeVariation(self.model, self._q_sym, self._qdot_sym)
         # This computes dAg/dt * v, not Ag. Need Ag directly.
         # Option: computeCentroidalMap
-        Ag_map = self.pinocchio_casadi.computeCentroidalMap(self.model, self._q_sym)
+        Ag_map = pin.computeCentroidalMap(self.model, self._q_sym)
         H_expr = Ag_map @ self._qdot_sym  # Centroidal momentum H = [linear, angular]
         angular_momentum_expr = H_expr[3:]  # Extract angular part
 
@@ -282,7 +310,7 @@ class PinocchioModel(BioModel):
         )
 
     @cache_function
-    def reshape_qdot(self, q_sym: ca.MX | ca.SX, qdot_sym: ca.MX | ca.SX) -> ca.Function:
+    def reshape_qdot(self) -> ca.Function:
         """
         Map velocity vector (qdot_sym, nv) to tangent vector of configuration (nq).
         For free flyers, this involves mapping angular velocity to quaternion derivatives.
@@ -291,7 +319,13 @@ class PinocchioModel(BioModel):
         """
         if self.nb_q == self.nb_qdot:
             # If dimensions match, assume qdot is already the time derivative of q
-            return ca.Function("reshape_qdot", [q_sym, qdot_sym], [qdot_sym], ["q", "qdot_in"], ["qdot_out"])
+            return ca.Function(
+                "reshape_qdot",
+                [self._q_sym, self._qdot_sym, self.parameters],
+                [self._qdot_sym],
+                ["q", "qdot_in", "parameters"],
+                ["qdot_out"],
+            )
         elif self._has_floating_base:
             # Use pinocchio.integrate to get the idea, need symbolic version
             # dq = pinocchio.integrate(model, q_zero, v*dt) - q_zero / dt
@@ -373,29 +407,26 @@ class PinocchioModel(BioModel):
     def forward_dynamics(self, with_contact=False) -> ca.Function:
         """compute the forward dynamics (qddot = aba(q, v, tau))"""
         if with_contact:
-            # Pinocchio's contact dynamics (e.g., pin.forwardDynamics with constraints)
-            # needs more setup (contact models, etc.) - Defer for now.
             raise NotImplementedError("Forward dynamics with contact not implemented for PinocchioModel.")
 
-        qddot_expr = self.pinocchio_casadi.aba(self.model, self._q_sym, self._qdot_sym, self._tau_sym)
-        inputs = [self._q_sym, self._qdot_sym, self._tau_sym]
-        input_names = ["q", "qdot", "tau"]
-        # TODO: Handle external forces if protocol requires it as input here
-        # external_forces_sym = ca.MX.sym(...)
-        # qddot_expr = self.pinocchio_casadi.aba(..., fext=external_forces_sym)
-        # inputs.append(external_forces_sym)
-        # input_names.append("external_forces")
+        data = self.model.createData()
+        pin.forwardKinematics(self.model, data, self._q_sym, self._qdot_sym)
+        qddot_expr = pin.aba(self.model, data, self._q_sym, self._qdot_sym, self._tau_sym)
+
+        inputs = [self._q_sym, self._qdot_sym, self._tau_sym, self.external_forces, self.parameters]
+        input_names = ["q", "qdot", "tau", "external_forces", "parameters"]
+
         return ca.Function("forward_dynamics", inputs, [qddot_expr], input_names, ["qddot"])
 
     @cache_function
     def inverse_dynamics(self) -> ca.Function:
         """compute the inverse dynamics (tau = rnea(q, v, a))"""
-        tau_expr = self.pinocchio_casadi.rnea(self.model, self._q_sym, self._qdot_sym, self._qddot_sym)
+        tau_expr = pin.rnea(self.model, self._q_sym, self._qdot_sym, self._qddot_sym)
         inputs = [self._q_sym, self._qdot_sym, self._qddot_sym]
         input_names = ["q", "qdot", "qddot"]
         # TODO: Handle external forces if protocol requires it as input here
         # external_forces_sym = ca.MX.sym(...)
-        # tau_expr = self.pinocchio_casadi.rnea(..., fext=external_forces_sym)
+        # tau_expr = pin.rnea(..., fext=external_forces_sym)
         # inputs.append(external_forces_sym)
         # input_names.append("external_forces")
         return ca.Function("inverse_dynamics", inputs, [tau_expr], input_names, ["tau"])
@@ -452,7 +483,7 @@ class PinocchioModel(BioModel):
         # For now, assume pinocchio casadi provides a way to get all frame poses
         try:
             # This hypothetical function computes placement of *all* frames
-            all_poses_expr = self.pinocchio_casadi.updateFramePlacements(self.model, self._q_sym)
+            all_poses_expr = pin.updateFramePlacements(self.model, self._q_sym)
             # Extract translation part for each frame
             for frame_id in range(self.model.nframes):
                 # Need a symbolic way to get frame pose from all_poses_expr or recompute
@@ -460,7 +491,7 @@ class PinocchioModel(BioModel):
                 # all_frame_positions.append(frame_pose[:3, 3]) # Extract translation
 
                 # Workaround: Recompute each frame individually (less efficient)
-                frame_pos = self.pinocchio_casadi.framePlacement(self.model, self._q_sym, frame_id).translation()
+                frame_pos = pin.framePlacement(self.model, self._q_sym, frame_id).translation()
                 all_frame_positions.append(frame_pos)
 
         except AttributeError:
@@ -490,19 +521,17 @@ class PinocchioModel(BioModel):
     # These require symbolic Jacobians and their time derivatives. Pinocchio CasADi provides these.
 
     @cache_function
-    def frame_velocity(self, frame_id: int, reference_frame=pin.LOCAL) -> ca.Function:
+    def frame_velocity(self, frame_id: int, reference_frame=LOCAL) -> ca.Function:
         """Get the velocity of one frame"""
-        frame_vel_expr = self.pinocchio_casadi.getFrameVelocity(
-            self.model, self._q_sym, self._qdot_sym, frame_id, reference_frame
-        )
+        frame_vel_expr = pin.getFrameVelocity(self.model, self._q_sym, self._qdot_sym, frame_id, reference_frame)
         return ca.Function(
             f"frame_velocity_{frame_id}", [self._q_sym, self._qdot_sym], [frame_vel_expr], ["q", "qdot"], ["frame_vel"]
         )
 
     @cache_function
-    def frame_acceleration(self, frame_id: int, reference_frame=pin.LOCAL) -> ca.Function:
+    def frame_acceleration(self, frame_id: int, reference_frame=LOCAL) -> ca.Function:
         """Get the acceleration of one frame"""
-        frame_acc_expr = self.pinocchio_casadi.getFrameAcceleration(
+        frame_acc_expr = pin.getFrameAcceleration(
             self.model, self._q_sym, self._qdot_sym, self._qddot_sym, frame_id, reference_frame
         )
         return ca.Function(
@@ -514,12 +543,12 @@ class PinocchioModel(BioModel):
         )
 
     @cache_function
-    def markers_velocities(self, reference_frame=pin.LOCAL) -> ca.Function:
+    def markers_velocities(self, reference_frame=LOCAL) -> ca.Function:
         """Get the velocities of all markers (frames)"""
         all_frame_vels = []
         for frame_id in range(self.model.nframes):
             # Requires symbolic getFrameVelocity
-            frame_vel_expr = self.pinocchio_casadi.getFrameVelocity(
+            frame_vel_expr = pin.getFrameVelocity(
                 self.model, self._q_sym, self._qdot_sym, frame_id, reference_frame
             ).linear()  # Linear velocity part
             all_frame_vels.append(frame_vel_expr)
@@ -529,9 +558,9 @@ class PinocchioModel(BioModel):
         )
 
     @cache_function
-    def marker_velocity(self, marker_index: int, reference_frame=pin.LOCAL) -> ca.Function:
+    def marker_velocity(self, marker_index: int, reference_frame=LOCAL) -> ca.Function:
         """Get the linear velocity of one marker (frame)"""
-        frame_vel_expr = self.pinocchio_casadi.getFrameVelocity(
+        frame_vel_expr = pin.getFrameVelocity(
             self.model, self._q_sym, self._qdot_sym, marker_index, reference_frame
         ).linear()
         return ca.Function(
@@ -543,12 +572,12 @@ class PinocchioModel(BioModel):
         )
 
     @cache_function
-    def markers_accelerations(self, reference_frame=pin.LOCAL) -> ca.Function:
+    def markers_accelerations(self, reference_frame=LOCAL) -> ca.Function:
         """Get the accelerations of all markers (frames)"""
         all_frame_accs = []
         for frame_id in range(self.model.nframes):
             # Requires symbolic getFrameAcceleration
-            frame_acc_expr = self.pinocchio_casadi.getFrameAcceleration(
+            frame_acc_expr = pin.getFrameAcceleration(
                 self.model, self._q_sym, self._qdot_sym, self._qddot_sym, frame_id, reference_frame
             ).linear()  # Linear acceleration part
             all_frame_accs.append(frame_acc_expr)
@@ -562,9 +591,9 @@ class PinocchioModel(BioModel):
         )
 
     @cache_function
-    def marker_acceleration(self, marker_index: int, reference_frame=pin.LOCAL) -> ca.Function:
+    def marker_acceleration(self, marker_index: int, reference_frame=LOCAL) -> ca.Function:
         """Get the linear acceleration of one marker (frame)"""
-        frame_acc_expr = self.pinocchio_casadi.getFrameAcceleration(
+        frame_acc_expr = pin.getFrameAcceleration(
             self.model, self._q_sym, self._qdot_sym, self._qddot_sym, marker_index, reference_frame
         ).linear()
         return ca.Function(
@@ -593,9 +622,7 @@ class PinocchioModel(BioModel):
     def rigid_contact_acceleration(self, contact_index: int, contact_axis: int) -> ca.Function:
         """Get the rigid contact acceleration (requires contact dynamics setup)"""
         # Need frame acceleration and projection onto axis
-        frame_acc_func = self.frame_acceleration(
-            contact_index, reference_frame=pin.LOCAL
-        )  # Acceleration in local frame
+        frame_acc_func = self.frame_acceleration(contact_index, reference_frame=LOCAL)  # Acceleration in local frame
         frame_acc_expr = frame_acc_func(self._q_sym, self._qdot_sym, self._qddot_sym)
 
         # Project onto axis (e.g., axis 0 is X, 1 is Y, 2 is Z in local frame)
@@ -665,17 +692,6 @@ class PinocchioModel(BioModel):
         q_max = ca.DM(self.model.upperPositionLimit)
         qdot_min = -ca.DM(self.model.velocityLimit)
         qdot_max = ca.DM(self.model.velocityLimit)
-        qddot_min = -ca.DM(self.model.effortLimit)  # Use effort limits as proxy? Needs review.
-        qddot_max = ca.DM(self.model.effortLimit)
-
-        # Handle potential infinite bounds from pinocchio (often large numbers)
-        inf = float("inf")
-        q_min[ca.is_inf(q_min)] = -inf
-        q_max[ca.is_inf(q_max)] = inf
-        qdot_min[ca.is_inf(qdot_min)] = -inf
-        qdot_max[ca.is_inf(qdot_max)] = inf
-        qddot_min[ca.is_inf(qddot_min)] = -inf
-        qddot_max[ca.is_inf(qddot_max)] = inf
 
         min_bounds = ca.DM()
         max_bounds = ca.DM()
@@ -699,8 +715,8 @@ class PinocchioModel(BioModel):
                     max_b = mapping["q"].map(max_b)
 
             elif var == "qddot":
-                min_b = qddot_min
-                max_b = qddot_max
+                min_b = 10 * qdot_min  # Assuming qddot limits are scaled from qdot
+                max_b = 10 * qdot_max
                 # Apply mapping similarly if needed
                 if mapping and "qddot" in mapping:
                     min_b = mapping["qddot"].map(min_b)
@@ -714,15 +730,17 @@ class PinocchioModel(BioModel):
             min_bounds = ca.vertcat(min_bounds, min_b)
             max_bounds = ca.vertcat(max_bounds, max_b)
 
-        bounds = Bounds(min_bound=np.array(min_bounds).flatten(), max_bound=np.array(max_bounds).flatten())
+        bounds = Bounds(
+            key=variables, min_bound=np.array(min_bounds).flatten(), max_bound=np.array(max_bounds).flatten()
+        )
         return bounds
 
     @cache_function
     def lagrangian(self) -> ca.Function:
         """Compute the Lagrangian L = K - P"""
         # Use Pinocchio CasADi functions for kinetic and potential energy
-        K = self.pinocchio_casadi.computeKineticEnergy(self.model, self._q_sym, self._qdot_sym)
-        P = self.pinocchio_casadi.computePotentialEnergy(self.model, self._q_sym)
+        K = pin.computeKineticEnergy(self.model, self._q_sym, self._qdot_sym)
+        P = pin.computePotentialEnergy(self.model, self._q_sym)
         L = K - P
         return ca.Function("lagrangian", [self._q_sym, self._qdot_sym], [L], ["q", "qdot"], ["L"])
 

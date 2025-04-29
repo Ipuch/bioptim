@@ -84,19 +84,19 @@ def prepare_ocp(
     try:
         x_bounds = BoundsList()
         # Note: PinocchioModel.bounds_from_ranges assumes 'q' and 'qdot' variable names
-        x_bounds["q"] = bio_model.bounds_from_ranges("q") # Gets bounds from URDF joint limits
-        x_bounds["qdot"] = bio_model.bounds_from_ranges("qdot") # Gets velocity limits
-    except KeyError: # Handle case where URDF might lack limits
+        x_bounds["q"] = bio_model.bounds_from_ranges("q")  # Gets bounds from URDF joint limits
+        x_bounds["qdot"] = bio_model.bounds_from_ranges("qdot")  # Gets velocity limits
+    except KeyError:  # Handle case where URDF might lack limits
         print("Warning: Bounds not fully defined in URDF, using manual bounds.")
         x_bounds = BoundsList()
-        limit_range = (-3.15, 3.15) # Example manual range
-        velocity_limit = 10        # Example manual limit
+        limit_range = (-3.15, 3.15)  # Example manual range
+        velocity_limit = 10  # Example manual limit
         x_bounds["q"] = [limit_range[0]] * bio_model.nb_q, [limit_range[1]] * bio_model.nb_q
         x_bounds["qdot"] = [-velocity_limit] * bio_model.nb_qdot, [velocity_limit] * bio_model.nb_qdot
 
     # Enforce initial and final position/velocity
     x_bounds["q"][:, [0, -1]] = 0  # Start and end position at 0 rad
-    x_bounds["q"][0, -1] = 3.14   # End at pi rad (upward) - Assumes 1st DoF is rotation
+    x_bounds["q"][0, -1] = 3.14  # End at pi rad (upward) - Assumes 1st DoF is rotation
     x_bounds["qdot"][:, [0, -1]] = 0  # Start and end without any velocity
 
     # Initial guess (optional since it is 0, we show how to initialize anyway)
@@ -105,17 +105,10 @@ def prepare_ocp(
     x_init["qdot"] = [0] * bio_model.nb_qdot
 
     # Define control path bounds
-    n_tau = bio_model.nb_tau # Should be 1 for single joint pendulum
-    # Use effort limits from URDF if available, otherwise manual
-    effort_limit = 100 # Example manual limit
-    try:
-         tau_limits = bio_model.model.effortLimit
-         u_bounds = BoundsList()
-         u_bounds["tau"] = -tau_limits, tau_limits
-    except AttributeError:
-         print("Warning: Effort limits not found in model, using manual bounds for control.")
-         u_bounds = BoundsList()
-         u_bounds["tau"] = [-effort_limit] * n_tau, [effort_limit] * n_tau
+    n_tau = bio_model.nb_tau  # Should be 1 for single joint pendulum
+    effort_limit = 100  # Example manual limit
+    u_bounds = BoundsList()
+    u_bounds["tau"] = [-effort_limit] * n_tau, [effort_limit] * n_tau
 
     # Initial guess (optional since it is 0, we show how to initialize anyway)
     u_init = InitialGuessList()
@@ -131,7 +124,7 @@ def prepare_ocp(
         x_bounds=x_bounds,
         u_bounds=u_bounds,
         objective_functions=objective_functions,
-        use_sx=use_sx,
+        use_sx=True,
         n_threads=n_threads,
         control_type=control_type,
     )
@@ -168,13 +161,15 @@ def main():
     # The default 'animate' might try bioviz. You may need a specific viewer like meshcat.
     # For now, let's call animate, but it might require viewer setup.
     print("Attempting animation...")
-    print("Note: PinocchioModel animation requires a compatible viewer (e.g., meshcat-python or bioviz with conversion).")
+    print(
+        "Note: PinocchioModel animation requires a compatible viewer (e.g., meshcat-python or bioviz with conversion)."
+    )
     print("Ensure viewer is installed and running if necessary.")
     try:
-        sol.animate(n_frames=100) # Request 100 frames for interpolation
+        sol.animate(n_frames=100)  # Request 100 frames for interpolation
     except Exception as e:
         print(f"Animation failed: {e}")
 
 
 if __name__ == "__main__":
-    main() 
+    main()
