@@ -32,7 +32,6 @@ def prepare_ocp(
     final_time: float,
     n_shooting: int,
     ode_solver: OdeSolverBase = OdeSolver.RK4(),
-    use_sx: bool = True,
     n_threads: int = 1,
     phase_dynamics: PhaseDynamics = PhaseDynamics.SHARED_DURING_THE_PHASE,
     expand_dynamics: bool = True,
@@ -51,8 +50,6 @@ def prepare_ocp(
         The number of shooting points to define int the direct multiple shooting program
     ode_solver: OdeSolverBase = OdeSolver.RK4()
         Which type of OdeSolver to use
-    use_sx: bool
-        If the SX variable should be used instead of MX (can be extensive on RAM)
     n_threads: int
         The number of threads to use in the paralleling (1 = no parallel computing)
     phase_dynamics: PhaseDynamics
@@ -79,20 +76,11 @@ def prepare_ocp(
 
     # Path bounds
     # Assuming a single DoF pendulum (rotation)
-    # Use model limits if defined in URDF, otherwise set manually
     # PinocchioModel.bounds_from_ranges can be used if limits are set in URDF <limit> tag
-    try:
-        x_bounds = BoundsList()
-        # Note: PinocchioModel.bounds_from_ranges assumes 'q' and 'qdot' variable names
-        x_bounds["q"] = bio_model.bounds_from_ranges("q")  # Gets bounds from URDF joint limits
-        x_bounds["qdot"] = bio_model.bounds_from_ranges("qdot")  # Gets velocity limits
-    except KeyError:  # Handle case where URDF might lack limits
-        print("Warning: Bounds not fully defined in URDF, using manual bounds.")
-        x_bounds = BoundsList()
-        limit_range = (-3.15, 3.15)  # Example manual range
-        velocity_limit = 10  # Example manual limit
-        x_bounds["q"] = [limit_range[0]] * bio_model.nb_q, [limit_range[1]] * bio_model.nb_q
-        x_bounds["qdot"] = [-velocity_limit] * bio_model.nb_qdot, [velocity_limit] * bio_model.nb_qdot
+    x_bounds = BoundsList()
+    # Note: PinocchioModel.bounds_from_ranges assumes 'q' and 'qdot' variable names
+    x_bounds["q"] = bio_model.bounds_from_ranges("q")  # Gets bounds from URDF joint limits
+    x_bounds["qdot"] = bio_model.bounds_from_ranges("qdot")  # Gets velocity limits
 
     # Enforce initial and final position/velocity
     x_bounds["q"][:, [0, -1]] = 0  # Start and end position at 0 rad
@@ -124,7 +112,7 @@ def prepare_ocp(
         x_bounds=x_bounds,
         u_bounds=u_bounds,
         objective_functions=objective_functions,
-        use_sx=True,
+        use_sx=True,  # Only use SX for PinocchioModel
         n_threads=n_threads,
         control_type=control_type,
     )
@@ -150,25 +138,20 @@ def main():
 
     # --- Solve the ocp --- #
     # Note: Online plotting might depend on the chosen viewer backend for PinocchioModel
-    sol = ocp.solve(Solver.IPOPT(show_online_optim=True))
+    sol = ocp.solve(Solver.IPOPT(show_online_optim=False))
 
     # --- Show the results --- #
     sol.print_cost()
-    # sol.graphs(show_bounds=True)
+    sol.graphs(show_bounds=True)
 
     # --- Animate the solution --- #
     # Note: Animation for PinocchioModel relies on an external viewer setup.
     # The default 'animate' might try bioviz. You may need a specific viewer like meshcat.
     # For now, let's call animate, but it might require viewer setup.
-    print("Attempting animation...")
     print(
         "Note: PinocchioModel animation requires a compatible viewer (e.g., meshcat-python or bioviz with conversion)."
     )
     print("Ensure viewer is installed and running if necessary.")
-    try:
-        sol.animate(n_frames=100)  # Request 100 frames for interpolation
-    except Exception as e:
-        print(f"Animation failed: {e}")
 
 
 if __name__ == "__main__":

@@ -2,6 +2,8 @@ from typing import Callable, Any
 
 import casadi as ca
 import numpy as np
+
+# import pinocchio as pin
 import pinocchio.casadi as pin
 from casadi import SX
 from pinocchio import buildModelFromUrdf, LOCAL
@@ -49,17 +51,23 @@ class PinocchioModel(BioModel):
         # This influences q vs nv dimensions
         self._has_floating_base = self.model.joints[1].shortname() == "JointModelFreeFlyer"
 
+        # Prepare symbolic variables for CasADi functions
+        self._q_sym = ca.SX.sym("q", self.nb_q, 1)
+        self._qdot_sym = ca.SX.sym("qdot", self.nb_qdot, 1)  # Corresponds to nv
+        self._qddot_sym = ca.SX.sym("qddot", self.nb_qdot, 1)  # Corresponds to nv
+        self._tau_sym = ca.SX.sym("tau", self.nb_tau, 1)  # Corresponds to nv
+
         self.parameters = SX()
         self._cached_functions = {}
         self._symbolic_variables()
 
     def _symbolic_variables(self):
         """Declaration of SX variables of the right shape for the creation of CasADi Functions"""
-        self._q_sym = SX.sym("q", self.nb_q, 1)
-        self._qdot_sym = SX.sym("qdot", self.nb_qdot, 1)  # Corresponds to nv
-        self._qddot_sym = SX.sym("qddot", self.nb_qdot, 1)  # Corresponds to nv
-        self._tau_sym = SX.sym("tau", self.nb_tau, 1)  # Corresponds to nv
+        self.q = SX.sym("q_mx", self.nb_q, 1)
+        self.qdot = SX.sym("qdot_mx", self.nb_qdot, 1)
+        self.qddot = SX.sym("qddot_mx", self.nb_qddot, 1)
         self.qddot_joints = SX.sym("qddot_joints_mx", self.nb_qddot - self.nb_root, 1)
+        self.tau = SX.sym("tau_mx", self.nb_tau, 1)
         self.muscle = SX.sym("muscle_mx", self.nb_muscles, 1)
         self.activations = SX.sym("activations_mx", self.nb_muscles, 1)
         self.external_forces = SX.sym(
