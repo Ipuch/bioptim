@@ -45,6 +45,7 @@ class BiorbdModel:
         parameters: ParameterList = None,
         external_force_set: ExternalForceSetTimeSeries | ExternalForceSetVariables = None,
         contact_types: list[ContactType] | tuple[ContactType] = (),
+        codegen_cache: "FunctionCodegenCache | None" = None,
         **kwargs,
     ):
         """
@@ -61,6 +62,9 @@ class BiorbdModel:
             The external forces to add to the model
         contact_types: list[ContactType] | tuple[ContactType]
             The type of contacts tu use in the model's dynamics
+        codegen_cache: FunctionCodegenCache | None
+            If provided, CasADi Functions will be compiled to C code and cached for reuse.
+            This can reduce memory usage and improve evaluation speed on repeated solves.
         """
         super().__init__(**kwargs)  # For multiple inheritance compatibility
 
@@ -84,6 +88,7 @@ class BiorbdModel:
         # TODO: remove mx (the MX parameters should be created inside the BiorbdModel)
         self.parameters = parameters.mx if parameters else MX()
 
+        self._codegen_cache = codegen_cache
         self._cached_functions = {}
 
     @property

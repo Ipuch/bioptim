@@ -8,6 +8,7 @@ This simple example is a good place to start investigating bioptim as it describ
 During the optimization process, the graphs are updated real-time (even though it is a bit too fast and short to really
 appreciate it). Finally, once it finished optimizing, it animates the model using the optimal solution
 """
+from bioptim.misc.codegen_cache import FunctionCodegenCache
 
 from bioptim import (
     OptimalControlProgram,
@@ -35,7 +36,7 @@ def prepare_ocp(
     final_time: float,
     n_shooting: int,
     ode_solver: OdeSolverBase = OdeSolver.RK4(),
-    use_sx: bool = True,
+    use_sx: bool = False,
     n_threads: int = 1,
     phase_dynamics: PhaseDynamics = PhaseDynamics.SHARED_DURING_THE_PHASE,
     expand_dynamics: bool = True,
@@ -74,8 +75,11 @@ def prepare_ocp(
     -------
     The OptimalControlProgram ready to be solved
     """
-
-    bio_model = TorqueBiorbdModel(biorbd_model_path)
+    cache = FunctionCodegenCache(cache_dir=".bioptim_cache", verbose=True)
+    # Disable codegen for SX mode (external functions don't support eval_sx)
+    cache.enabled = not use_sx
+    cache.enabled = False
+    bio_model = TorqueBiorbdModel(biorbd_model_path, codegen_cache=cache)
 
     # Add objective functions
     objective_functions = Objective(ObjectiveFcn.Lagrange.MINIMIZE_CONTROL, key="tau")

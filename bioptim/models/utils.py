@@ -73,7 +73,11 @@ def bounds_from_ranges(model, key: str, mapping: BiMapping | BiMappingList = Non
 
 
 def cache_function(method):
-    """Decorator to cache CasADi functions automatically"""
+    """Decorator to cache CasADi functions automatically.
+    
+    If the model has a `_codegen_cache` attribute set, functions will be 
+    compiled to C code and cached for reuse.
+    """
 
     def make_hashable(value):
         """
@@ -96,6 +100,13 @@ def cache_function(method):
 
         # Call the original function to create the CasADi function
         casadi_fun = method(self, *args, **kwargs)
+
+        # Use codegen cache if available
+        # The cache compiles both the function AND its reverse derivative (adj1_)
+        # into the same .so file, enabling automatic differentiation
+        codegen_cache = getattr(self, '_codegen_cache', None)
+        if codegen_cache is not None:
+            casadi_fun = codegen_cache.get_or_compile(casadi_fun, self)
 
         # Store in the cache
         self._cached_functions[key] = casadi_fun
