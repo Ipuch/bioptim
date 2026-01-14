@@ -1495,7 +1495,7 @@ class ConfigureVariables:
                 if nlp.model.name_dofs[i][-4:-1] == "Rot" or nlp.model.name_dofs[i][-6:-1] == "Trans":
                     new_names += [nlp.model.name_dofs[i]]
                 else:
-                    if nlp.model.name_dofs[i][-5:] != "QuatW":
+                    if nlp.model.name_dofs[i][-5:] != "QuatW" and nlp.model.name_dofs[i] != "GlenoHumeral_3":
                         if var_type == "qdot":
                             new_names += [nlp.model.name_dofs[i][:-5] + "omega" + nlp.model.name_dofs[i][-1]]
                         elif var_type == "qddot":

@@ -3,13 +3,103 @@ from functools import cached_property
 import matplotlib.pyplot as plt
 import numpy as np
 from casadi import collocation_points, MX, SX
-from ..misc.parameters_types import (
-    Int,
-    Str,
-    FloatList,
-    CX,
-    CXorFloat,
-)
+
+from typing import Any, Callable as CallableObj
+import numpy as np
+from typing import TypeAlias
+from casadi import MX, SX, DM
+
+
+Int: TypeAlias = int
+Range: TypeAlias = range
+Str: TypeAlias = str
+Float: TypeAlias = float
+Bool: TypeAlias = bool
+Tuple: TypeAlias = tuple
+List: TypeAlias = list
+Bytes: TypeAlias = bytes
+Callable: TypeAlias = CallableObj
+
+IntorFloat: TypeAlias = int | float
+
+AnyIterable: TypeAlias = list[Any] | tuple[Any, ...]
+AnyIterableOptional: TypeAlias = list[Any] | tuple[Any, ...] | None
+Indexer: TypeAlias = slice | list | range
+IndexerOptional: TypeAlias = slice | list | range | None
+AnyIterableOrSlice: TypeAlias = slice | list | tuple
+AnyIterableOrSliceOptional: TypeAlias = slice | list | tuple | None
+AnySequence: TypeAlias = list | tuple | range | np.ndarray
+AnySequenceOptional: TypeAlias = list | tuple | range | np.ndarray | None
+IntIterable: TypeAlias = list[int] | tuple[int, ...]
+IntIterableOptional: TypeAlias = list[int] | tuple[int, ...] | None
+StrIterable: TypeAlias = list[str] | tuple[str, ...]
+
+StrIterableOptional: TypeAlias = list[str] | tuple[str, ...] | None
+
+AnyDict: TypeAlias = dict[str, Any]
+AnyListorDict: TypeAlias = list[Any] | dict[str, Any]
+IntDict: TypeAlias = dict[str, int]
+NpArrayDict: TypeAlias = dict[str, np.ndarray]
+NpArrayDictOptional: TypeAlias = NpArrayDict | None
+
+AnyDictOptional: TypeAlias = dict[str, Any] | None
+AnyListOptional: TypeAlias = list[Any] | None
+
+AnyList: TypeAlias = list[Any]
+BoolList: TypeAlias = list[bool]
+IntList: TypeAlias = list[int]
+FloatList: TypeAlias = list[float]
+StrList: TypeAlias = list[str]
+MXList: TypeAlias = list[MX]
+DMList: TypeAlias = list[DM]
+NpArrayList: TypeAlias = list[np.ndarray]
+NpArray: TypeAlias = np.ndarray
+
+NpArrayorFloat: TypeAlias = np.ndarray | float
+NpArrayorFloatOptional: TypeAlias = np.ndarray | float | None
+FloatIterableorNpArray: TypeAlias = list[float] | tuple[float, ...] | np.ndarray
+FloatIterableorNpArrayorFloat: TypeAlias = FloatIterableorNpArray | float
+IntIterableorNpArray: TypeAlias = list[int] | tuple[int, ...] | range | np.ndarray
+IntIterableorNpArrayorInt: TypeAlias = int | IntIterableorNpArray
+
+IntListOptional: TypeAlias = list[int] | None
+FloatListOptional: TypeAlias = list[float] | None
+StrListOptional: TypeAlias = list[str] | None
+NpArrayListOptional: TypeAlias = list[np.ndarray] | None
+
+StrOrIterable: TypeAlias = str | list[str]
+
+IntOptional: TypeAlias = int | None
+IntOrStr: TypeAlias = int | str
+IntOrStrOptional: TypeAlias = int | str | None
+
+FloatOptional: TypeAlias = float | None
+
+StrOptional: TypeAlias = str | None
+
+BoolOptional: TypeAlias = bool | None
+
+NpArrayOptional: TypeAlias = np.ndarray | None
+
+AnyTuple: TypeAlias = tuple[Any, ...]
+IntTuple: TypeAlias = tuple[int, ...]
+FloatTuple: TypeAlias = tuple[float, ...]
+StrTuple: TypeAlias = tuple[str, ...]
+DoubleIntTuple: TypeAlias = tuple[int, int]
+DoubleFloatTuple: TypeAlias = tuple[float, float]
+DoubleNpArrayTuple: TypeAlias = tuple[np.ndarray, np.ndarray]
+
+
+IntStrorIterable: TypeAlias = int | str | AnyIterable
+IntorIterableOptional: TypeAlias = IntOptional | IntList | IntTuple
+
+CX: TypeAlias = MX | SX
+CXOptional: TypeAlias = MX | SX | None
+CXorFloat: TypeAlias = CX | float
+CXorDM: TypeAlias = MX | SX | DM | float
+CXorDMorFloatIterable: TypeAlias = FloatIterableorNpArray | MX | SX | DM
+CXorDMorNpArray: TypeAlias = np.ndarray | MX | SX | DM
+CXList: TypeAlias = list[CX]
 
 
 class LagrangeInterpolation:
@@ -22,10 +112,6 @@ class LagrangeInterpolation:
     @cached_property
     def polynomial_degree(self) -> Int:
         return len(self.time_grid)
-
-    @classmethod
-    def from_grid_type(cls, polynomial_degree: Int, collocation_type: Str = "radau"):
-        return cls(collocation_points(polynomial_degree, collocation_type))
 
     def lagrange_polynomial(self, j: Int, time_control_interval: CX) -> CX:
         """
@@ -195,16 +281,16 @@ class LagrangeInterpolation:
 
 def main():
     # Choose polynomial_order and get collocation points
-    polynomial_order = 5
-    time_grid = collocation_points(polynomial_order, "legendre")
+    polynomial_order = 3
+    time_grid = [0] + collocation_points(polynomial_order, "legendre")
 
     # Some example y-values
     y_dict = {
-        1: [2],
-        2: [0.3, 2],
-        3: [0.15, -0.45, 2],
-        4: [0.1, -0.2, 0.7, 2],
-        5: [0.075, 0.15, -0.4, 0.95, 2],
+        1: [0, 2],
+        2: [0, 0.3, 2],
+        3: [0, 0.15, -0.45, 2],
+        4: [0, 0.1, -0.2, 0.7, 2],
+        5: [0, 0.075, 0.15, -0.4, 0.95, 2],
     }
     y_values = y_dict[polynomial_order]
 
@@ -227,7 +313,7 @@ def main():
     ax[0].legend()
     ax[0].grid(True)
 
-    for i in range(polynomial_order):
+    for i in range(polynomial_order + 1):
         ax[0].plot(
             continuous_time,
             [lagrange_interp.lagrange_polynomial(i, t) * y_values[i] for t in continuous_time],
@@ -237,7 +323,7 @@ def main():
 
     ax[1].plot(continuous_time, interpolated_velocity, label="Interpolated Velocity")
 
-    for i in range(polynomial_order):
+    for i in range(polynomial_order + 1):
         ax[1].plot(
             continuous_time,
             [lagrange_interp.lagrange_polynomial_derivative(i, t) * y_values[i] for t in continuous_time],

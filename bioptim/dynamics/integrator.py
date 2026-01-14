@@ -618,6 +618,9 @@ class COLLOCATION(Integrator):
     def _integration_time(self):
         return [0] + collocation_points(self.degree, self.method)
 
+    def time_grid_len(self):
+        return self.degree + 1
+
     @property
     def shape_xf(self) -> DoubleIntTuple:
         return (self._x_sym_modified.shape[0], self.degree + 1)
