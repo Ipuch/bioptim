@@ -449,6 +449,9 @@ class HolonomicBiorbdModel(BiorbdModel):
             modified_generalized_forces - second_term @ self.biais_vector(q, qdot) - modified_non_linear_effect
         )
 
+        dynamics = modified_mass_matrix @ qddot_u - (modified_generalized_forces - second_term @ self.biais_vector(q, qdot) - modified_non_linear_effect)
+
+
         casadi_fun = Function(
             "partitioned_forward_dynamics",
             [self.q, self.qdot_u, self.tau],

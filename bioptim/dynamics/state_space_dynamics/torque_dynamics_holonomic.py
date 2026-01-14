@@ -58,9 +58,11 @@ class HolonomicTorqueDynamics(StateDynamics):
             slope_q = DynamicsFunctions.get(nlp.states_dot["q_u"], nlp.states_dot.scaled.cx)
             slope_qdot = DynamicsFunctions.get(nlp.states_dot["qdot_u"], nlp.states_dot.scaled.cx)
             if nlp.dynamics_type.ode_solver.defects_type == DefectType.QDDOT_EQUALS_FORWARD_DYNAMICS:
-                qddot_u = nlp.model.partitioned_forward_dynamics()(q_u, qdot_u, q_v_init, tau)
-                derivative = vertcat(qdot_u, qddot_u)
-                defects = vertcat(slope_q, slope_qdot) - derivative
+                qddot_u = nlp.model.partitioned_forward_dynamics
+                dynamics_defects = function()(q_u, qdot_u, q_v_init, tau, qddot_u)
+                # derivative = vertcat(qdot_u, qddot_u)
+                # defects = vertcat(slope_q, slope_qdot) - derivative
+                defects = vertcat(slope_q - qdot_u, dynamics_defects)
             else:
                 raise NotImplementedError(
                     f"The defect type {nlp.dynamics_type.ode_solver.defects_type} is not implemented yet for holonomic torque driven dynamics."
