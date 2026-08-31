@@ -10,6 +10,7 @@ from biorbd_casadi import (
 )
 from casadi import SX, MX, vertcat, horzcat, norm_fro, Function, DM
 
+from ..codegen import CodegenOptions, attach_codegen, flush_codegen
 from ..utils import _var_mapping, bounds_from_ranges, cache_function, check_contacts
 from ...limits.path_conditions import Bounds
 from ...misc.mapping import BiMapping, BiMappingList
@@ -41,6 +42,7 @@ class BiorbdModel:
         parameters: ParameterList = None,
         external_force_set: ExternalForceSetTimeSeries | ExternalForceSetVariables = None,
         contact_types: list[ContactType] | tuple[ContactType] = (),
+        codegen: "bool | CodegenOptions | None" = None,
         **kwargs,
     ):
         """
@@ -55,6 +57,10 @@ class BiorbdModel:
             The external forces to add to the model
         contact_types: list[ContactType] | tuple[ContactType]
             The type of contacts tu use in the model's dynamics
+        codegen: bool | CodegenOptions | None
+            If the model's CasADi functions should be compiled to a shared library and reused across runs. This
+            trades a one-off compilation for a large reduction in RAM on big models, and is a slight loss on small
+            ones. None (the default) consults $BIOPTIM_CODEGEN. See bioptim.models.codegen.
         """
         super().__init__(**kwargs)  # For multiple inheritance compatibility
 
@@ -77,6 +83,12 @@ class BiorbdModel:
         self.biorbd_external_forces_set = self._dispatch_forces() if self.external_force_set else None
 
         self._cached_functions = {}
+        # Last, so the cache key fingerprints the model in its final constructed state.
+        attach_codegen(self, codegen)
+
+    def codegen_flush(self) -> None:
+        """Compile the CasADi functions this model had to build, for reuse on the next run."""
+        flush_codegen(self)
 
     @property
     def contact_types(self):

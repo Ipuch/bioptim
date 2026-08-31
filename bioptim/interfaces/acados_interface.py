@@ -99,6 +99,15 @@ class AcadosInterface(SolverInterface):
             The options to pass to the solver
         """
 
+        if getattr(ocp, "codegen_active", False):
+            # ACADOS re-generates its own C from the SX expression graph, so it cannot see
+            # through an external() node: the model symbols would simply be undefined.
+            raise RuntimeError(
+                "ACADOS is not compatible with compiled model functions (codegen). ACADOS generates its own C "
+                "code from an SX graph and cannot resolve the external symbols. Rebuild the model with "
+                "codegen=False to use ACADOS."
+            )
+
         if not isinstance(ocp.cx(), SX):
             raise RuntimeError("CasADi graph must be SX to be solved with ACADOS. Please set use_sx to True in OCP")
 

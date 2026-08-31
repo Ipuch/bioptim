@@ -58,6 +58,7 @@ from ..misc.enums import (
 from ..misc.mapping import BiMappingList, Mapping, BiMapping
 from ..misc.options import OptionDict
 from ..models.biorbd.variational_biorbd_model import VariationalBiorbdModel
+from ..models.codegen import warn_codegen_cold_run, warn_incompatible_options
 from ..models.protocols.biomodel import BioModel
 from ..dynamics.state_space_dynamics import StateDynamics
 from ..optimization.optimization_variable import OptimizationVariableList
@@ -337,9 +338,70 @@ class OptimalControlProgram:
 
         self._prepare_vector_layout(ordering_strategy)
 
+        self._flush_codegen()
+
     def _check_bioptim_version(self) -> None:
         self.version = {"casadi": casadi.__version__, "biorbd": biorbd.__version__, "bioptim": __version__}
         return
+
+    def _apply_codegen_use_sx(self, bio_model: list, use_sx: Bool) -> Bool:
+        """
+        Reconcile the user's graph options with compiled model functions.
+
+        A compiled function loaded through casadi.external() is an opaque node. That is
+        exactly what we want in an MX graph -- one node instead of the whole rigid-body
+        expression, inlined once per RK stage per shooting node. In an SX graph it is still
+        correct, but every call is marshalled through the SX interpreter, which measures
+        roughly 37x slower. So when any model is compiled, the problem is forced into MX,
+        and the user is told once.
+
+        Only a *warm* cache triggers the override. Forcing MX while nothing is compiled yet
+        would be strictly worse than doing nothing: the model calls become interpreted call
+        nodes instead of inlined expressions, which measures ~170x slower per constraint
+        Jacobian. So a cold run keeps the user's own settings, records what it needed, and
+        compiles at the end; the run after it gets the benefit.
+
+        Returns the use_sx to actually use. Paired with _apply_codegen_expand, which cannot
+        run this early because the dynamics options are not normalized yet.
+        """
+        caches = [getattr(model, "_codegen", None) for model in bio_model]
+        self._codegen_caches = [c for c in caches if c is not None]
+        self.codegen_active = bool(self._codegen_caches) and all(c.is_warm for c in self._codegen_caches)
+        if not self.codegen_active:
+            return use_sx
+
+        self._codegen_forced_use_sx = use_sx
+        return False
+
+    def _apply_codegen_expand(self, dynamics: DynamicsOptionsList) -> None:
+        """Turn off dynamics expansion when the model functions are compiled, and say so once."""
+        if not getattr(self, "codegen_active", False):
+            if getattr(self, "_codegen_caches", None):
+                warn_codegen_cold_run()
+            return
+
+        expanding = [d for d in dynamics if d.expand_dynamics]
+        warn_incompatible_options(
+            ocp_use_sx=getattr(self, "_codegen_forced_use_sx", False), expand_dynamics=bool(expanding)
+        )
+        for dynamics_options in expanding:
+            dynamics_options.expand_dynamics = False
+
+    def _flush_codegen(self) -> None:
+        """
+        Compile the model functions this problem turned out to need.
+
+        Deliberately at the end of construction: which functions a problem needs is only
+        known once it has asked for them. So a cold run builds the graphs as usual and pays
+        the usual RAM, and every run after it loads the library and never builds them at
+        all. Use mode="build-only" to make the intent of a warm-up run explicit.
+        """
+        if not getattr(self, "_codegen_caches", None):
+            return
+        for nlp in self.nlp:
+            flush = getattr(nlp.model, "codegen_flush", None)
+            if flush is not None:
+                flush()
 
     def _initialize_model(self, bio_model: AnyIterable | BioModel) -> list[BioModel]:
         """
@@ -454,6 +516,10 @@ class OptimalControlProgram:
         variable_mappings: BiMappingList,
         integrated_value_functions: dict[Str, Callable] | None,
     ) -> AnyTuple:
+        # Must happen before anything derived from use_sx is built (the default ParameterList
+        # below is the first such thing), otherwise half the problem ends up SX and half MX.
+        use_sx = self._apply_codegen_use_sx(bio_model, use_sx)
+
         if objective_functions is None:
             objective_functions = ObjectiveList()
         elif isinstance(objective_functions, Objective):
@@ -533,6 +599,8 @@ class OptimalControlProgram:
             dynamics.add(tp)
         if not isinstance(dynamics, DynamicsOptionsList):
             raise ValueError("dynamics must be of type DynamicsOptionsList or DynamicsOptions")
+
+        self._apply_codegen_expand(dynamics)
 
         # Type of CasADi graph
         self.cx = SX if use_sx else MX

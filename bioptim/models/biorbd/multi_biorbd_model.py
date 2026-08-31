@@ -4,6 +4,7 @@ from casadi import MX, vertcat, Function, horzcat
 from typing import Callable
 
 from .biorbd_model import BiorbdModel
+from ..codegen import CodegenOptions, attach_codegen, flush_codegen
 from ..utils import _var_mapping, bounds_from_ranges, cache_function
 from ...limits.path_conditions import Bounds
 from ...misc.mapping import BiMapping, BiMappingList
@@ -47,6 +48,7 @@ class MultiBiorbdModel:
         self,
         bio_model: tuple[str | biorbd.Model | BiorbdModel, ...],
         extra_bio_models: tuple[str | biorbd.Model | BiorbdModel, ...] = (),
+        codegen: "bool | CodegenOptions | None" = None,
         **kwargs,
     ):
         """
@@ -99,6 +101,12 @@ class MultiBiorbdModel:
 
         self.check_contacts()
         self._cached_functions = {}
+        # Last, so the cache key fingerprints the model in its final constructed state.
+        attach_codegen(self, codegen)
+
+    def codegen_flush(self) -> None:
+        """Compile the CasADi functions this model had to build, for reuse on the next run."""
+        flush_codegen(self)
 
     def __getitem__(self, index: Int):
         return self.models[index]

@@ -625,7 +625,12 @@ class PenaltyOption(OptionGeneric):
 
             modified_fcn = (self.function[node](time, phases_dt, x, u, p, a, d) - target_cx) ** exponent
 
-        if self.expand:
+        # Expanding a graph that contains a compiled model function does not fail, it just
+        # routes every call through the SX interpreter, which is far slower than leaving it
+        # as an MX call node. See OptimalControlProgram._apply_codegen_constraints.
+        expand = self.expand and not getattr(controller.ocp, "codegen_active", False)
+
+        if expand:
             self.function[node] = self.function[node].expand()
 
         self.function_non_threaded[node] = self.function[node]
@@ -650,7 +655,7 @@ class PenaltyOption(OptionGeneric):
         else:
             self.multi_thread = False  # Override the multi_threading, since only one node is optimized
 
-        if self.expand:
+        if expand:
             self.function[node] = self.function[node].expand()
             self.weighted_function[node] = self.weighted_function[node].expand()
 

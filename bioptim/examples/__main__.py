@@ -52,6 +52,7 @@ examples_ = OrderedDict(
                     ("Example cyclic movement", "example_cyclic_movement.py"),
                     ("Example constraint weight", "custom_constraint_weights.py"),
                     ("Example Pinocchio", "example_pinocchio.py"),
+                    ("Example model codegen", "example_model_codegen.py"),
                     ("How to plot", "how_to_plot.py"),
                 ]
             ),

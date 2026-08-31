@@ -215,6 +215,12 @@ class HolonomicBiorbdModel(BiorbdModel):
         The joint indexes are not mandatory because a HolonomicBiorbdModel can be used without the partitioned dynamics,
         for instance in VariationalOptimalControlProgram.
         """
+        # The constraints change every partitioned function this model generates, so any
+        # previously cached or compiled function belongs to a different configuration.
+        self._cached_functions = {}
+        if getattr(self, "_codegen", None) is not None:
+            self._codegen.reset_key()
+
         dependent_joint_index = dependent_joint_index or []
         independent_joint_index = independent_joint_index or [i for i in range(self.nb_q)]
 

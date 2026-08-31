@@ -3,6 +3,7 @@ from typing import Callable
 from casadi import SX, Function, horzcat, vertcat
 import numpy as np
 
+from ..codegen import CodegenOptions, attach_codegen, flush_codegen
 from ..utils import _var_mapping, bounds_from_ranges, cache_function, Range
 from ...limits.path_conditions import Bounds
 from ...misc.enums import ContactType
@@ -36,8 +37,20 @@ class PinocchioModel:
         self,
         bio_model: str | object,
         parameters: ParameterList = None,
+        codegen: "bool | CodegenOptions | None" = None,
         **kwargs,
     ):
+        """
+        Parameters
+        ----------
+        bio_model: str | pinocchio.Model
+            The path to the URDF file or the pinocchio.Model
+        parameters: ParameterList
+            The parameters to add to the model
+        codegen: bool | CodegenOptions | None
+            If the model's CasADi functions should be compiled to a shared library and reused across runs. See
+            bioptim.models.codegen. None (the default) consults $BIOPTIM_CODEGEN.
+        """
         super().__init__(**kwargs)  # For multiple inheritance compatibility
         self._pinocchio_module, self._casadi_pinocchio_module = _import_pinocchio()
         self._path = None
@@ -61,6 +74,12 @@ class PinocchioModel:
         self._marker_names = self._extract_marker_names()
         self._symbolic_variables()
         self._cached_functions = {}
+        # Last, so the cache key fingerprints the model in its final constructed state.
+        attach_codegen(self, codegen)
+
+    def codegen_flush(self) -> None:
+        """Compile the CasADi functions this model had to build, for reuse on the next run."""
+        flush_codegen(self)
 
     def _symbolic_variables(self):
         self.q = SX.sym("q_sx", self.nb_q, 1)

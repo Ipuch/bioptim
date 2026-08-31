@@ -238,6 +238,9 @@ def _shake_penalties_tree(ocp, penalties_cx: CX, v: CX, v_bounds: DoubleNpArrayT
 
     # Shake the tree
     penalty = Function("penalty", [v], [penalties_cx])
+    # With compiled model functions this expand succeeds but is a large pessimisation: it
+    # turns every opaque external call into an SX-interpreted one.
+    expand = expand and not getattr(ocp, "codegen_active", False)
     if expand:
         try:
             penalty = penalty.expand()

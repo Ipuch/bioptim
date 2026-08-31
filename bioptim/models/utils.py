@@ -87,7 +87,14 @@ def bounds_from_ranges(model, key: str, mapping: BiMapping | BiMappingList = Non
 
 
 def cache_function(method):
-    """Decorator to cache CasADi functions automatically"""
+    """
+    Decorator to cache CasADi functions automatically.
+
+    If the model carries a `_codegen` handle (see `bioptim.models.codegen`), this is also
+    where a pre-compiled version of the function is picked up. On a warm cache the original
+    method is never called at all, so the symbolic graph is never built -- which is the
+    whole point: the graph is what costs the RAM.
+    """
 
     def make_hashable(value):
         """
@@ -108,8 +115,19 @@ def cache_function(method):
         if key in self._cached_functions:
             return self._cached_functions[key]
 
-        # Call the original function to create the CasADi function
-        casadi_fun = method(self, *args, **kwargs)
+        codegen = getattr(self, "_codegen", None)
+        if codegen is None or not codegen.enabled:
+            # Call the original function to create the CasADi function
+            casadi_fun = method(self, *args, **kwargs)
+        else:
+            # The symbol is derived from the whole key, so forward_dynamics(with_contact=True)
+            # and forward_dynamics(with_contact=False) -- which have identical signatures --
+            # cannot resolve to the same compiled function.
+            symbol = codegen.symbol_for(key)
+            casadi_fun = codegen.load(symbol)
+            if casadi_fun is None:
+                casadi_fun = method(self, *args, **kwargs)
+                codegen.record(key, symbol, casadi_fun)
 
         # Store in the cache
         self._cached_functions[key] = casadi_fun

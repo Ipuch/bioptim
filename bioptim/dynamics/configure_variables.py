@@ -6,6 +6,7 @@ from casadi import DM, vertcat, Function
 
 from .configure_new_variable import NewVariableConfiguration
 from .fatigue.fatigue_dynamics import FatigueList
+from ..models.codegen import maybe_expand
 from ..misc.enums import PlotType, ContactType
 from ..misc.fcn_enum import FcnEnum
 from ..misc.mapping import BiMapping, Mapping
@@ -1091,7 +1092,8 @@ class ConfigureVariables:
             ],
             ["t_span", "x", "u", "p", "a", "d"],
             ["rigid_contact_forces"],
-        ).expand()
+        )
+        nlp.rigid_contact_forces_func = maybe_expand(nlp.rigid_contact_forces_func, nlp)
 
         all_contact_names = []
         for elt in ocp.nlp:
@@ -1143,10 +1145,11 @@ class ConfigureVariables:
                 nlp.algebraic_states.scaled.cx,
                 nlp.numerical_timeseries.cx,
             ],
-            [nlp.model.soft_contact_forces().expand()(nlp.states["q"].cx, nlp.states["qdot"].cx, nlp.parameters.cx)],
+            [maybe_expand(nlp.model.soft_contact_forces(), nlp)(nlp.states["q"].cx, nlp.states["qdot"].cx, nlp.parameters.cx)],
             ["t_span", "x", "u", "p", "a", "d"],
             ["soft_contact_forces"],
-        ).expand()
+        )
+        nlp.soft_contact_forces_func = maybe_expand(nlp.soft_contact_forces_func, nlp)
 
         component_list = ["Mx", "My", "Mz", "Fx", "Fy", "Fz"]
 
@@ -1464,9 +1467,9 @@ class ConfigureVariables:
 
         # if expand:
         # TODO: see how to restore the possiblity to not expand the functions
-        nlp.dynamics_defects_func = nlp.dynamics_defects_func.expand()
-        nlp.dynamics_defects_func_first_node = nlp.dynamics_defects_func_first_node.expand()
-        nlp.dynamics_defects_func_last_node = nlp.dynamics_defects_func_last_node.expand()
+        nlp.dynamics_defects_func = maybe_expand(nlp.dynamics_defects_func, nlp)
+        nlp.dynamics_defects_func_first_node = maybe_expand(nlp.dynamics_defects_func_first_node, nlp)
+        nlp.dynamics_defects_func_last_node = maybe_expand(nlp.dynamics_defects_func_last_node, nlp)
 
     @staticmethod
     def _get_kinematics_based_names(nlp, var_type: str) -> list[str]:

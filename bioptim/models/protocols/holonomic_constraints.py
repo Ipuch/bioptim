@@ -6,6 +6,7 @@ from typing import Any, Callable
 
 from casadi import MX, Function, jacobian, vertcat, trace, sqrt, DM
 
+from ..codegen import maybe_expand
 from .biomodel import BioModel
 from ...misc.options import OptionDict
 
@@ -136,7 +137,8 @@ class HolonomicConstraintsFcn:
             [constraint],
             ["q"],
             ["holonomic_constraint"],
-        ).expand()
+        )
+        constraints_func = maybe_expand(constraints_func, model)
 
         constraints_jacobian_func = Function(
             "holonomic_constraints_jacobian",
@@ -144,7 +146,8 @@ class HolonomicConstraintsFcn:
             [constraints_jacobian],
             ["q"],
             ["holonomic_constraints_jacobian"],
-        ).expand()
+        )
+        constraints_jacobian_func = maybe_expand(constraints_jacobian_func, model)
 
         bias_vector = compute_bias_vector(constraints_jacobian, q_sym, q_dot_sym)
 
@@ -154,7 +157,8 @@ class HolonomicConstraintsFcn:
             [bias_vector],
             ["q", "q_dot"],
             ["superimpose_markers_bias"],
-        ).expand()
+        )
+        bias_func = maybe_expand(bias_func, model)
 
         return constraints_func, constraints_jacobian_func, bias_func
 
@@ -326,7 +330,8 @@ class HolonomicConstraintsFcn:
             [constraint],
             ["q"],
             ["c_align"],
-        ).expand()
+        )
+        constraints_func = maybe_expand(constraints_func, model)
 
         constraints_jacobian_func = Function(
             "align_frames_jacobian",
@@ -334,7 +339,8 @@ class HolonomicConstraintsFcn:
             [constraints_jacobian],
             ["q"],
             ["J_align"],
-        ).expand()
+        )
+        constraints_jacobian_func = maybe_expand(constraints_jacobian_func, model)
 
         bias_vector = compute_bias_vector(constraints_jacobian, q_sym, q_dot_sym)
 
@@ -344,7 +350,8 @@ class HolonomicConstraintsFcn:
             [bias_vector],
             ["q", "q_dot"],
             ["bias_align_frames"],
-        ).expand()
+        )
+        bias_func = maybe_expand(bias_func, model)
 
         return constraints_func, constraints_jacobian_func, bias_func
 
@@ -387,7 +394,8 @@ class HolonomicConstraintsFcn:
             [constraint],
             ["q", "parameters"],
             ["holonomic_constraint"],
-        ).expand()
+        )
+        constraints_func = maybe_expand(constraints_func, model)
 
         constraints_jacobian_func = Function(
             "holonomic_constraints_jacobian",
@@ -395,7 +403,8 @@ class HolonomicConstraintsFcn:
             [constraints_jacobian],
             ["q", "parameters"],
             ["holonomic_constraints_jacobian"],
-        ).expand()
+        )
+        constraints_jacobian_func = maybe_expand(constraints_jacobian_func, model)
 
         bias_vector = compute_bias_vector(constraints_jacobian, q_sym, q_dot_sym)
 
@@ -405,7 +414,8 @@ class HolonomicConstraintsFcn:
             [bias_vector],
             ["q", "q_dot", "parameters"],
             ["rigid_contacts_bias"],
-        ).expand()
+        )
+        bias_func = maybe_expand(bias_func, model)
 
         return constraints_func, constraints_jacobian_func, bias_func
 

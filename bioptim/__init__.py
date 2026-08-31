@@ -217,6 +217,7 @@ from .models.biorbd.model_dynamics import (
     JointAccelerationBiorbdModel,
     MultiTorqueBiorbdModel,
 )
+from .models.codegen import CodegenOptions, clear_codegen_cache
 from .models.pinocchio import PinocchioModel, TorquePinocchioModel
 from .models.protocols.biomodel import BioModel
 from .models.protocols.holonomic_constraints import HolonomicConstraintsFcn, HolonomicConstraintsList

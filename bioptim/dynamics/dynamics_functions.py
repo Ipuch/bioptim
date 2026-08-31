@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING
 from casadi import vertcat, MX, SX
 
 from ..models.protocols.holonomic_constraints import HolonomicConstraintsFcn
+from ..models.codegen import maybe_expand
 from ..misc.enums import ContactType
 from ..misc.mapping import BiMapping
 from ..optimization.optimization_variable import OptimizationVariable
@@ -261,7 +262,7 @@ class DynamicsFunctions:
 
         if ContactType.SOFT_IMPLICIT in nlp.model.contact_types:
             soft_contact_defect = (
-                nlp.model.soft_contact_forces().expand()(q, qdot, nlp.parameters.cx)
+                maybe_expand(nlp.model.soft_contact_forces(), nlp)(q, qdot, nlp.parameters.cx)
                 - nlp.algebraic_states["soft_contact_forces"].cx
             )
             contact_defects = vertcat(contact_defects, soft_contact_defect)
@@ -343,7 +344,7 @@ class DynamicsFunctions:
             )
 
         if ContactType.SOFT_EXPLICIT in contact_types:
-            contact_forces = nlp.model.soft_contact_forces().expand()(q, qdot, nlp.parameters.cx)
+            contact_forces = maybe_expand(nlp.model.soft_contact_forces(), nlp)(q, qdot, nlp.parameters.cx)
             external_forces = vertcat(
                 external_forces, nlp.model.map_soft_contact_forces_to_global_forces(contact_forces)
             )

@@ -6,6 +6,7 @@ from casadi import sum1, if_else, vertcat, lt, SX, MX, jacobian, Function, MX_ey
 from .path_conditions import Bounds
 from .penalty import PenaltyFunctionAbstract, PenaltyOption, PenaltyController
 from .weight import ConstraintWeight
+from ..models.codegen import maybe_expand
 from ..misc.enums import Node, InterpolationType, PenaltyType
 from ..misc.fcn_enum import FcnEnum
 from ..misc.options import OptionList
@@ -742,7 +743,7 @@ class ConstraintFunction(PenaltyFunctionAbstract):
                 [Fdz.T - Gdz.T @ m_matrix.T],
             )
             if penalty.expand:
-                Mc = Mc.expand()
+                Mc = maybe_expand(Mc, controller)
 
             # Covariance propagation rule
             Pf = Function(
@@ -759,7 +760,7 @@ class ConstraintFunction(PenaltyFunctionAbstract):
                 [m_matrix @ (Gdx @ cov_matrix @ Gdx.T + Gdw @ sigma_ww @ Gdw.T) @ m_matrix.T],
             )
             if penalty.expand:
-                Pf = Pf.expand()
+                Pf = maybe_expand(Pf, controller)
 
             Gdx_fun = Function(
                 "Gdx_fun",

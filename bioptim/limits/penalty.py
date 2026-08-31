@@ -6,6 +6,7 @@ from casadi import horzcat, vertcat, Function, MX_eye, SX_eye, SX, jacobian, tra
 
 from .penalty_controller import PenaltyController
 from .penalty_option import PenaltyOption
+from ..models.codegen import maybe_expand
 from ..misc.enums import Node, Axis, ControlType, QuadratureRule, ContactType
 from ..models.protocols.stochastic_biomodel import StochasticBioModel
 
@@ -1025,7 +1026,7 @@ class PenaltyFunctionAbstract:
 
             # Note to the developers: the .expand() should be an option in the future
             # But for now, removing it breaks the tests as it introduces NaNs in the NLP
-            soft_contact_force = controller.get_nlp.model.soft_contact_forces().expand()(
+            soft_contact_force = maybe_expand(controller.get_nlp.model.soft_contact_forces(), controller)(
                 controller.states["q"].cx,
                 controller.states["qdot"].cx,
                 controller.parameters.cx,
